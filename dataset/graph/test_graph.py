@@ -5,6 +5,8 @@ import os
 import argparse
 from tqdm import tqdm
 
+import networkx as nx
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default="checkpoints/vanilla_8layer_graph")
@@ -15,6 +17,8 @@ def main():
 
     if args.test_file:
         test_file = args.test_file
+        # Assume graph_edges.json is in the same directory as test_file
+        data_dir = os.path.dirname(test_file)
     else:
         # Try to find latest if data_dir not provided
         if args.data_dir is None:
@@ -33,6 +37,18 @@ def main():
             data_dir = args.data_dir
             
         test_file = os.path.join(data_dir, "test.json")
+
+    # Load Graph Structure for Verification
+    edges_file = os.path.join(data_dir, "graph_edges.json")
+    if os.path.exists(edges_file):
+        print(f"Loading graph structure from {edges_file}...")
+        with open(edges_file, 'r') as f:
+            edges = json.load(f)
+        G = nx.DiGraph()
+        G.add_edges_from(edges)
+    else:
+        print(f"Warning: {edges_file} not found. Cannot verify path validity.")
+        G = None
 
     print(f"Loading model from {args.model_path}...")
     try:
@@ -129,19 +145,45 @@ def main():
         except ValueError:
             generated_path = [] # Failed to parse
             
-        # Convert target to list of ints for comparison
-        try:
-            target_path_list = [int(x) for x in target_path.split()]
-        except ValueError:
-            target_path_list = []
+        # --- Graph Verification ---
+        is_valid = False
+        is_optimal = False
+        
+        if not generated_path:
+             print("Result:   INVALID (Empty/Parse Error)")
+             continue
 
-        # Check exact match
-        if generated_path == target_path_list:
-            print("Result:   MATCH")
-        elif len(generated_path) > len(target_path_list) and generated_path[:len(target_path_list)] == target_path_list:
-             print("Result:   MATCH (Prefix) - Generated extra tokens")
+        # Check if path starts with source and ends with target
+        if str(generated_path[0]) != source or str(generated_path[-1]) != target:
+             print(f"Result:   INVALID (Endpoints Mismatch: {generated_path[0]}!={source} or {generated_path[-1]}!={target})")
+             continue
+             
+        # Check if it is a valid path in the graph
+        try:
+            is_valid = nx.is_path(G, generated_path)
+        except nx.NetworkXError:
+            is_valid = False
+            
+        if not is_valid:
+             print("Result:   INVALID (Edge does not exist)")
         else:
-            print("Result:   MISMATCH")
+            # It is a valid path!
+            if type_char == 'P':
+                print("Result:   VALID PATH (Match)")
+            elif type_char == 'S':
+                # Check optimality
+                try:
+                    shortest_len = nx.shortest_path_length(G, int(source), int(target))
+                    # nx length is number of edges. generated_path length is number of nodes.
+                    # edges = nodes - 1
+                    gen_edges = len(generated_path) - 1
+                    
+                    if gen_edges == shortest_len:
+                        print("Result:   OPTIMAL SHORTEST PATH (Match)")
+                    else:
+                        print(f"Result:   SUB-OPTIMAL (Len {gen_edges} vs Optimal {shortest_len})")
+                except nx.NetworkXNoPath:
+                    print("Result:   ERROR (No path exists in graph?)")
 
 if __name__ == "__main__":
     main()
