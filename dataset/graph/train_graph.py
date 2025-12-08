@@ -117,6 +117,12 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-360M")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # Our data generation script adds the EOS token string explicitly ("</s>"), 
+    # so we don't strictly need the tokenizer to add it automatically if it tokenizes the string correctly.
+    # However, to be safe, let's ensure we don't double add it.
+    # If the string ends with </s>, the tokenizer should handle it if it knows the special token.
+    # Let's verify the tokenizer knows </s> is eos.
+    print(f"EOS Token: {tokenizer.eos_token}")
 
     print("\n" + "="*60)
     print("CREATING MODEL")
