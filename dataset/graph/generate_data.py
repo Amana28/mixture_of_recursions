@@ -52,8 +52,14 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
+    # Create a descriptive subfolder name
+    subfolder_name = f"graph_n{args.num_nodes}_p{args.sparsity}"
+    args.output_dir = os.path.join(args.output_dir, subfolder_name)
+
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
+        
+    print(f"Output directory: {args.output_dir}")
 
     print(f"Generating graph with {args.num_nodes} nodes and sparsity {args.sparsity}...")
     G = generate_graph(args.num_nodes, args.sparsity, args.seed)
