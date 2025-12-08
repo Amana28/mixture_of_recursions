@@ -20,7 +20,7 @@ DEFAULT_DATA_DIR = "dataset/graph"
 OUTPUT_DIR = "checkpoints/vanilla_8layer_graph"
 
 class GraphDataset(Dataset):
-    def __init__(self, file_path, tokenizer, max_length=512):
+    def __init__(self, file_path, tokenizer, max_length=512, repeat=1):
         self.data = []
         with open(file_path, 'r') as f:
             raw_data = json.load(f)
@@ -28,6 +28,10 @@ class GraphDataset(Dataset):
             for item in raw_data:
                 self.data.append(item["text"])
         
+        # Repeat the dataset if requested
+        if repeat > 1:
+            self.data = self.data * repeat
+            
         self.tokenizer = tokenizer
         self.max_length = max_length
 
@@ -45,22 +49,34 @@ class GraphDataset(Dataset):
             return_tensors="pt"
         )
         
-        # For Causal LM, labels are usually the same as input_ids
-        # The Trainer/DataCollator will handle shifting if we use DataCollatorForLanguageModeling(mlm=False)
-        # But standard Dataset usually returns input_ids and attention_mask
-        
         input_ids = encodings.input_ids.squeeze()
         attention_mask = encodings.attention_mask.squeeze()
         
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "labels": input_ids.clone() # We train on the whole sequence
+            "labels": input_ids.clone() 
         }
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, help="Path to the directory containing train.json and test.json")
+    
+    # Training Hyperparameters
+    parser.add_argument("--per_device_train_batch_size", type=int, default=8, help="Batch size per device")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Gradient accumulation steps")
+    parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--num_train_epochs", type=int, default=100, help="Number of training epochs")
+    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
+    parser.add_argument("--adam_beta1", type=float, default=0.9, help="Adam beta1")
+    parser.add_argument("--adam_beta2", type=float, default=0.99, help="Adam beta2")
+    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm")
+    parser.add_argument("--warmup_steps", type=int, default=50, help="Warmup steps")
+    parser.add_argument("--logging_steps", type=int, default=20, help="Logging steps")
+    parser.add_argument("--save_steps", type=int, default=500, help="Save steps")
+    parser.add_argument("--eval_steps", type=int, default=100, help="Evaluation steps")
+    parser.add_argument("--repeat_train", type=int, default=1, help="Number of times to repeat the training dataset")
+    
     args, unknown = parser.parse_known_args()
     
     # If data_dir is not provided, try to find the most recent graph folder
@@ -94,20 +110,6 @@ def main():
         "intermediate_size": 352,
         "num_attention_heads": 4,
         "num_key_value_heads": 2,
-    }
-
-    # ----- Training Settings -----
-    TRAINING_CONFIG = {
-        "per_device_train_batch_size": 32,
-        "gradient_accumulation_steps": 2,
-        "max_length": 512,
-        "learning_rate": 3e-3,
-        "num_train_epochs": 20,
-        "warmup_steps": 50,
-        "weight_decay": 0.1,
-        "logging_steps": 10,
-        "save_steps": 200,
-        "eval_steps": 200,
     }
 
     print("\n" + "="*60)
@@ -155,23 +157,27 @@ def main():
     print("LOADING DATA")
     print("="*60)
     
-    train_dataset = GraphDataset(train_path, tokenizer, max_length=TRAINING_CONFIG["max_length"])
-    test_dataset = GraphDataset(test_path, tokenizer, max_length=TRAINING_CONFIG["max_length"])
+    # Pass repeat argument to train dataset
+    train_dataset = GraphDataset(train_path, tokenizer, max_length=512, repeat=args.repeat_train)
+    test_dataset = GraphDataset(test_path, tokenizer, max_length=512, repeat=1)
     
-    print(f"Train size: {len(train_dataset)}")
+    print(f"Train size: {len(train_dataset)} (Repeated {args.repeat_train} times)")
     print(f"Test size: {len(test_dataset)}")
 
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
-        per_device_train_batch_size=TRAINING_CONFIG["per_device_train_batch_size"],
-        gradient_accumulation_steps=TRAINING_CONFIG["gradient_accumulation_steps"],
-        learning_rate=TRAINING_CONFIG["learning_rate"],
-        num_train_epochs=TRAINING_CONFIG["num_train_epochs"],
-        warmup_steps=TRAINING_CONFIG["warmup_steps"],
-        weight_decay=TRAINING_CONFIG["weight_decay"],
-        logging_steps=TRAINING_CONFIG["logging_steps"],
-        save_steps=TRAINING_CONFIG["save_steps"],
-        eval_steps=TRAINING_CONFIG["eval_steps"],
+        per_device_train_batch_size=args.per_device_train_batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        learning_rate=args.learning_rate,
+        num_train_epochs=args.num_train_epochs,
+        warmup_steps=args.warmup_steps,
+        weight_decay=args.weight_decay,
+        adam_beta1=args.adam_beta1,
+        adam_beta2=args.adam_beta2,
+        max_grad_norm=args.max_grad_norm,
+        logging_steps=args.logging_steps,
+        save_steps=args.save_steps,
+        eval_steps=args.eval_steps,
         eval_strategy="steps",
         save_strategy="steps",
         fp16=torch.cuda.is_available(),
