@@ -90,18 +90,56 @@ def main():
                 pad_token_id=tokenizer.pad_token_id
             )
             
-        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=False)
         
+        # Clean up: remove prompt and stop at EOS
+        # The prompt is "source target type "
+        # We want to extract just the path part
+        
+        # First, find where the prompt ends. 
+        # Since we know the prompt string, we can just replace it or split.
+        prompt_text = f"{source} {target} {type_char}"
+        
+        # Handle EOS truncation manually if needed (though skip_special_tokens=True usually hides it, 
+        # the model might keep generating if not stopped properly).
+        # We explicitly look for the EOS token string used in generation "</s>" or the tokenizer's eos_token
+        
+        if tokenizer.eos_token and tokenizer.eos_token in generated_text:
+            generated_text = generated_text.split(tokenizer.eos_token)[0]
+        elif "</s>" in generated_text: # Fallback for Llama/SmolLM
+            generated_text = generated_text.split("</s>")[0]
+            
+        # Remove the prompt part to get just the generated path
+        if generated_text.startswith(prompt_text):
+            generated_path_str = generated_text[len(prompt_text):].strip()
+        else:
+            # Fallback if prompt is somehow modified or special tokens mess up matching
+            # Try to find the start of the path
+            generated_path_str = generated_text.replace(prompt_text, "").strip()
+
         print("-" * 40)
         print(f"Sample {i+1}:")
         print(f"Prompt:   {prompt}")
         print(f"Target:   {target_path}")
-        print(f"Generated: {generated_text[len(prompt):].strip()}")
+        print(f"Generated: {generated_path_str}")
         
-        # Simple check
-        gen_path = generated_text[len(prompt):].strip()
-        if gen_path.startswith(target_path): # simplistic check
-            print("Result:   MATCH (Prefix)")
+        # Convert to list of ints
+        try:
+            generated_path = [int(x) for x in generated_path_str.split()]
+        except ValueError:
+            generated_path = [] # Failed to parse
+            
+        # Convert target to list of ints for comparison
+        try:
+            target_path_list = [int(x) for x in target_path.split()]
+        except ValueError:
+            target_path_list = []
+
+        # Check exact match
+        if generated_path == target_path_list:
+            print("Result:   MATCH")
+        elif len(generated_path) > len(target_path_list) and generated_path[:len(target_path_list)] == target_path_list:
+             print("Result:   MATCH (Prefix) - Generated extra tokens")
         else:
             print("Result:   MISMATCH")
 
