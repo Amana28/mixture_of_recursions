@@ -15,9 +15,8 @@ from transformers import (
 import argparse
 
 # ----- Data Paths -----
-# Using absolute paths or relative to the script
-TRAIN_DATA_PATH = "dataset/graph/train.json"
-TEST_DATA_PATH = "dataset/graph/test.json"
+# Default paths (will be overridden by argparse if provided)
+DEFAULT_DATA_DIR = "dataset/graph" 
 OUTPUT_DIR = "checkpoints/vanilla_8layer_graph"
 
 class GraphDataset(Dataset):
@@ -60,6 +59,30 @@ class GraphDataset(Dataset):
         }
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, help="Path to the directory containing train.json and test.json")
+    args, unknown = parser.parse_known_args()
+    
+    # If data_dir is not provided, try to find the most recent graph folder
+    if args.data_dir is None:
+        base_dir = "dataset/graph"
+        if os.path.exists(base_dir):
+            subdirs = [os.path.join(base_dir, d) for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d)) and d.startswith("graph_")]
+            if subdirs:
+                # Sort by creation time (or name) to get the latest
+                latest_subdir = max(subdirs, key=os.path.getmtime)
+                print(f"No data_dir provided. Using latest generated dataset: {latest_subdir}")
+                data_dir = latest_subdir
+            else:
+                data_dir = base_dir
+        else:
+            data_dir = base_dir
+    else:
+        data_dir = args.data_dir
+
+    train_path = os.path.join(data_dir, "train.json")
+    test_path = os.path.join(data_dir, "test.json")
+    
     print(f"PyTorch: {torch.__version__}")
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
@@ -126,8 +149,8 @@ def main():
     print("LOADING DATA")
     print("="*60)
     
-    train_dataset = GraphDataset(TRAIN_DATA_PATH, tokenizer, max_length=TRAINING_CONFIG["max_length"])
-    test_dataset = GraphDataset(TEST_DATA_PATH, tokenizer, max_length=TRAINING_CONFIG["max_length"])
+    train_dataset = GraphDataset(train_path, tokenizer, max_length=TRAINING_CONFIG["max_length"])
+    test_dataset = GraphDataset(test_path, tokenizer, max_length=TRAINING_CONFIG["max_length"])
     
     print(f"Train size: {len(train_dataset)}")
     print(f"Test size: {len(test_dataset)}")
