@@ -166,7 +166,7 @@ def main():
         logging_steps=TRAINING_CONFIG["logging_steps"],
         save_steps=TRAINING_CONFIG["save_steps"],
         eval_steps=TRAINING_CONFIG["eval_steps"],
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         save_strategy="steps",
         fp16=torch.cuda.is_available(),
         report_to="none" # Disable wandb for this simple script unless requested
