@@ -121,15 +121,14 @@ def main():
             # Note: prompt_path_nodes[0] should be S.
         
         # Build Prompt String
-        prompt_str = f"{source_str} {target_str} {type_str} %"
+        # Old Format: S T P % ...
+        # New Format: S T % ... (P removed)
+        
+        prompt_str = f"{source_str} {target_str} %"
         if prompt_path_nodes:
             path_part_str = " ".join(str(n) for n in prompt_path_nodes)
             prompt_str += " " + path_part_str
-            
-        # Add a trailing space so model generates next token
-        # But tokenizer might handle it.
-        # "S T P % n1 n2" -> Model should predict space then n3
-        
+
         # Encode
         input_ids = []
         for word in prompt_str.split():
@@ -160,6 +159,7 @@ def main():
         generated_ids = output_ids[0].tolist()
         new_ids = generated_ids[len(input_ids):]
         
+        # Stop at EOS (\n)
         if eos_token_id in new_ids:
             new_ids = new_ids[:new_ids.index(eos_token_id)]
             
@@ -211,7 +211,27 @@ def main():
 
         # Log
         # Show prompt separate from completion?
-        results.append(f"Prompt: [{prompt_str}] Gen: [{generated_part_str}] Full: {full_reconstructed_path} | {sign}")
+        # Detailed failure logging (for debugging)
+        if sign == "*":
+             failure_reason = ""
+             if not full_reconstructed_path:
+                 failure_reason = "Empty path"
+             elif full_reconstructed_path[0] != int(source_str):
+                 failure_reason = f"Start mismatch ({full_reconstructed_path[0]} != {source_str})"
+             elif full_reconstructed_path[-1] != int(target_str):
+                 failure_reason = f"End mismatch ({full_reconstructed_path[-1]} != {target_str})"
+             elif len(set(full_reconstructed_path)) != len(full_reconstructed_path):
+                 failure_reason = "Cycle detected"
+             else:
+                for i in range(len(full_reconstructed_path)-1):
+                    u, v = full_reconstructed_path[i], full_reconstructed_path[i+1]
+                    if (u, v) not in valid_edges:
+                        failure_reason = f"Invalid edge ({u}, {v})"
+                        break
+             
+             results.append(f"FAIL: {failure_reason} | Prompt: [{prompt_str}] Gen: [{generated_part_str}] Full: {full_reconstructed_path}")
+        else:
+             results.append(f"PASS | Prompt: [{prompt_str}] Gen: [{generated_part_str}] Full: {full_reconstructed_path}")
     print("\n" + "="*30)
     print("TEST SUMMARY")
     print("="*30)

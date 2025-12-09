@@ -49,10 +49,41 @@ def main():
         model = model.cuda()
         print("Model moved to GPU.")
 
-    # 3. Load Validation Data (Binary)
-    test_bin_path = os.path.join(args.data_dir, "test.bin")
-    test_data = np.fromfile(test_bin_path, dtype=np.uint16)
-    print(f"Loaded test data: {len(test_data)} tokens")
+    # 3. Load Test Data (Text)
+    # create_bin_graph.py no longer enables test.bin, so we read test.txt directly
+    test_txt_path = os.path.join(args.data_dir, "test.txt")
+    print(f"Loading test data from {test_txt_path}...")
+    with open(test_txt_path, 'r') as f:
+        all_lines = [l.strip() for l in f if l.strip()]
+        
+    print(f"Total test lines: {len(all_lines)}")
+    
+    samples = []
+    # Parse lines to extract prompts: S T %
+    # Line format: S T P % n1 n2 ...
+    # create_bin_graph removes P, so we should too in our prompt.
+    for line in all_lines:
+        parts = line.split()
+        if len(parts) >= 4: # S T Type % ...
+            source = parts[0]
+            target = parts[1]
+            # type = parts[2] (ignored/removed)
+            # delim = parts[3] (%)
+            
+            # Construct prompt tokens
+            # format: S T % 
+            prompt_str = f"{source} {target} %"
+            
+            # Encode
+            prompt_ids = []
+            for word in prompt_str.split():
+                 if word in stoi:
+                     prompt_ids.append(stoi[word])
+            
+            if prompt_ids:
+                 samples.append(prompt_ids)
+
+    print(f"Extracted {len(samples)} samples from test data.")
 
     # 4. Load Master Dataset for Verification
     graph_data_path = os.path.join(args.data_dir, "graph_data.json")
@@ -64,50 +95,33 @@ def main():
     for entry in master_data:
         master_lookup[(entry["source"], entry["target"])] = entry
 
-    # 5. Extract Samples from Test Data
-    # Test data contains prompts only (no EOS), each prompt is 3 tokens: source, target, type
-    
-    samples = []
-    prompt_size = 4  # Each test prompt is exactly 4 tokens (S T Type %)
-    for i in range(0, len(test_data) - prompt_size + 1, prompt_size):
-        sample = list(test_data[i:i + prompt_size])
-        samples.append(sample)
-            
-    print(f"Extracted {len(samples)} samples from test data.")
-    
     # Select a subset to test
     if args.num_samples < len(samples):
         import random
         random.seed(42)
-        test_indices = random.sample(range(len(samples)), args.num_samples)
-        test_samples = [samples[i] for i in test_indices]
-    else:
-        test_samples = samples
+        samples = random.sample(samples, args.num_samples)
 
     # 6. Evaluation Loop
     results = []
     valid_path_count = 0
+    optimal_count = 0
     
-    print(f"\nTesting {len(test_samples)} samples...")
+    print(f"\nTesting {len(samples)} samples...")
     print(f"{'Sample':<50} | {'Status'}")
     print("-" * 60)
     
-    for sample_tokens in tqdm(test_samples):
+    for sample_tokens in tqdm(samples):
         # Decode sample to understand what it is
-        sample_strs = [itos[t] for t in sample_tokens]
+        # sample_tokens is [S, T, %] IDs
         
-        if len(sample_strs) < 4: # Need at least Source Target Type %
-            continue 
-            
+        sample_strs = [itos[t] for t in sample_tokens]
         source_str = sample_strs[0]
         target_str = sample_strs[1]
-        type_str = sample_strs[2]
-        # delimiter is [3] which is '%'
+        # sample_strs[2] is %
         
         # Prepare Prompt
-        prompt_tokens = sample_tokens[:4] # Source, Target, Type, %
-        input_ids = torch.tensor([prompt_tokens], dtype=torch.long)
-        attention_mask = torch.ones_like(input_ids) # All ones since no padding in prompt
+        input_ids = torch.tensor([sample_tokens], dtype=torch.long)
+        attention_mask = torch.ones_like(input_ids)
         
         if torch.cuda.is_available():
             input_ids = input_ids.cuda()
@@ -126,25 +140,21 @@ def main():
             
         # Decode Output
         generated_ids = output_ids[0].tolist()
-        # Remove prompt from generated
-        new_ids = generated_ids[len(prompt_tokens):]
+        # Remove prompt
+        new_ids = generated_ids[len(sample_tokens):]
         
-        # Stop at EOS
+        # Stop at EOS (\n) or [PAD]
         if eos_token_id in new_ids:
             new_ids = new_ids[:new_ids.index(eos_token_id)]
+        
+        # Also check for padding if it somehow appeared before EOS (unlikely)
+        # But meta['eos_token_id'] is \n.
             
-        generated_strs = [itos[t] for t in new_ids]
+        generated_strs = [itos.get(t, "") for t in new_ids]
         
         # Verification Logic
         # The prompt ends with %, so the model generates the PATH starting from the source node.
-        # e.g. Prompt: "3 37 P %", Model: "3 5 12 ..."
-        
-        full_generated_path_strs = generated_strs
-        
-        # Explicit check: If path doesn't start with source, it's invalid (but we can flag it)
-        # Or should we assume the prompt implies the source? 
-        # Usually path string includes source. "5 19 P % 5 19"
-        # So we expect the generated string to start with Source.
+        # e.g. Prompt: "3 37 %", Model: "3 5 12 ..."
         
         full_generated_path_strs = generated_strs
         
@@ -160,7 +170,11 @@ def main():
             target = int(target_str)
             
             # Parse generated path
-            generated_path = [int(s) for s in full_generated_path_strs]
+            # Remove empty strings if any
+            generated_path = []
+            for s in full_generated_path_strs:
+                if s.strip():
+                     generated_path.append(int(s))
 
             if not generated_path:
                 sign = "*"
@@ -174,26 +188,23 @@ def main():
                     entry = master_lookup[(source, target)]
                     
                     if not entry["has_path"]:
-                        sign = "*" # Should not happen if test set is valid
+                        sign = "*" 
                     else:
-                        # Check if valid path in graph
-                        # We check if this exact sequence is in the list of valid paths
                         is_valid = generated_path in entry["paths"]
-                        
                         if is_valid:
                             valid_path_count += 1
-                            sign = "" # Correct
+                            sign = "" 
                         else:
-                            sign = "*" # Invalid path
+                            sign = "*" 
                 else:
-                    sign = "*" # Unknown pair
+                    sign = "*" 
 
         except Exception:
             sign = "*"
 
         # Format Output
-        # Add % explicitly to show the delimiter
-        prompt_text = f"{source_str} {target_str} {type_str} %"
+        # Prompt was S T %
+        prompt_text = f"{source_str} {target_str} %"
         gen_text = " ".join(generated_strs)
         full_text = f"{prompt_text} {gen_text}"
         
