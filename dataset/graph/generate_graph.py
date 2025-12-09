@@ -85,14 +85,19 @@ def main():
             if u == v: continue
             
             if nx.has_path(G, u, v):
-                # We defer path generation until after splitting to save time/memory?
-                # No, user wants to use graph dataset for "10 shortest paths".
-                # Let's verify if we need all simple paths. "10 random paths".
-                # If we use nx.all_simple_paths, it might be slow for big graphs.
-                # But for N=30 it's fine.
-                all_pairs_data[(u, v)] = {"has_path": True}
+                # We defer path generation until after splitting to save time/memory
+                # But we must initialize keys to avoid KeyError later
+                all_pairs_data[(u, v)] = {
+                    "has_path": True, 
+                    "paths": [], 
+                    "shortest_paths": []
+                }
             else:
-                all_pairs_data[(u, v)] = {"has_path": False}
+                all_pairs_data[(u, v)] = {
+                    "has_path": False,
+                    "paths": [], 
+                    "shortest_paths": []
+                }
 
     print(f"Total pairs: {len(all_pairs_data)}")
     
@@ -175,6 +180,10 @@ def main():
             
         for p in chosen_paths:
             dataset.append({"text": format_path_string(u, v, "P", p)})
+
+        # Update all_pairs_data for JSON export
+        all_pairs_data[(u, v)]["paths"] = all_simple # Save ALL simple paths for verification/JSON
+        all_pairs_data[(u, v)]["shortest_paths"] = shortest_paths # Save the N shortest paths found
 
     print(f"Split complete.")
     print(f"  Train Pairs: {cnt_train_pairs}")
