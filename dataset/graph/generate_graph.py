@@ -222,13 +222,6 @@ def main():
             
     print(f"Testing set generated with {test_pairs_count} pairs and {len(test_data)} samples.")
 
-    # Save files
-    with open(os.path.join(args.output_dir, "train.json"), "w") as f:
-        json.dump(train_data, f, indent=2)
-        
-    with open(os.path.join(args.output_dir, "test.json"), "w") as f:
-        json.dump(test_data, f, indent=2)
-        
     # Save the master dataset (all pairs info)
     # Convert sets/tuples to lists for JSON
     master_export = []
