@@ -68,7 +68,7 @@ def main():
     # Test data contains prompts only (no EOS), each prompt is 3 tokens: source, target, type
     
     samples = []
-    prompt_size = 3  # Each test prompt is exactly 3 tokens
+    prompt_size = 4  # Each test prompt is exactly 4 tokens (S T Type %)
     for i in range(0, len(test_data) - prompt_size + 1, prompt_size):
         sample = list(test_data[i:i + prompt_size])
         samples.append(sample)
