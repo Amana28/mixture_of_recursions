@@ -143,28 +143,14 @@ def main():
 
             
         # P: Random Simple Paths
-        # Use simple paths with cutoff to avoid explosion? User didn't specify.
-        # "10 random paths (though random walks -- P)"
-        # I'll use a reservoir sampling approach on simple paths generator if not too large, 
-        # or just take first 10 shuffled.
-        # For N=30, generating all paths is fast.
-        # Strategy: Generate all, sample N.
-        
-        # optimization: cutoff=None can be slow. 
-        # But let's try standard.
-        all_simple = list(nx.all_simple_paths(G, u, v, cutoff=len(G)))
-        
-        if len(all_simple) > args.num_paths:
-            chosen_paths = random.sample(all_simple, args.num_paths)
-        else:
-            chosen_paths = all_simple
+        # Use randomized DFS generator for efficiency
+        chosen_paths = generate_random_simple_paths(G, u, v, args.num_paths)
             
         for p in chosen_paths:
             dataset.append({"text": format_path_string(u, v, "P", p)})
 
-        # Update all_pairs_data for JSON export
-        all_pairs_data[(u, v)]["paths"] = all_simple # Save ALL simple paths for verification/JSON
-        all_pairs_data[(u, v)]["paths"] = [] # Removing exhaustive path list
+        # Update all_pairs_data (paths removed)
+        all_pairs_data[(u, v)]["paths"] = []
 
     print(f"Split complete.")
     print(f"  Train Pairs: {cnt_train_pairs}")
