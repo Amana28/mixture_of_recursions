@@ -7,6 +7,9 @@ import pickle
 import numpy as np
 import torch
 import logging
+import warnings
+warnings.filterwarnings("ignore")
+
 from torch.utils.data import Dataset
 from transformers import LlamaConfig, LlamaForCausalLM, Trainer, TrainingArguments, TrainerCallback
 from transformers.trainer_callback import PrinterCallback
