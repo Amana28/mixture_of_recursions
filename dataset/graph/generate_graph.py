@@ -45,7 +45,8 @@ def generate_random_simple_paths(G, source, target, num_paths, reachability_set,
                 if n not in visited:
                     # Lookahead: Can n reach target?
                     # Check pre-computed reachability set (O(1)) instead of BFS
-                    if (n, target) in reachability_set:
+                    # also allow if n IS the target (since (target, target) is not in set)
+                    if n == target or (n, target) in reachability_set:
                         current = n
                         path.append(n)
                         visited.add(n)
