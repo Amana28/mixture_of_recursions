@@ -101,95 +101,75 @@ def main():
     print(f"Total pairs: {len(all_pairs_data)}")
     print(f"Connected pairs: {len(connected_pairs)}")
     
-    # --- Training Set Generation ---
-    print("Generating training set...")
-    train_pairs = set()
-    train_data = []
-    
-    # Target: half of connected pairs
-    target_train_size = len(connected_pairs) // 2
-    
-    def add_sample(u, v, is_induced=False):
-        if (u, v) not in all_pairs_data or not all_pairs_data[(u, v)]["has_path"]:
-            return
-        
-        if (u, v) in train_pairs:
-            return
-            
-        train_pairs.add((u, v))
-        
-        data = all_pairs_data[(u, v)]
-        
-        if not is_induced:
-            # Pick one random path
-            path = random.choice(data["paths"])
-            train_data.append({"text": format_path_string(u, v, "P", path)})
-            
-            # Pick one random shortest path
-            shortest = random.choice(data["shortest_paths"])
-            train_data.append({"text": format_path_string(u, v, "S", shortest)})
-            
-            # Recursive step for the CHOSEN shortest path
-            for i in range(len(shortest) - 1):
-                s_node = shortest[i]
-                t_node = shortest[i+1]
-                add_sample(s_node, t_node, is_induced=True)
-        else:
-            # Induced (edge) case
-            shortest = [u, v] 
-            train_data.append({"text": format_path_string(u, v, "S", shortest)})
-    
-    # Main loop
-    available_pairs = list(connected_pairs)
-    random.shuffle(available_pairs)
-    
-    while len(train_pairs) < target_train_size and available_pairs:
-        if not available_pairs:
-            break
-            
-        u, v = available_pairs.pop()
-        
-        if (u, v) in train_pairs:
+    # =========================================================================
+    # NEW LOGIC: Collect ALL samples first, then split 80/20
+    # =========================================================================
+    print("Collecting ALL possible samples...")
+    all_samples = []
+
+    # 1. Add all paths and shortest paths for all connected pairs
+    for (u, v), data in all_pairs_data.items():
+        if not data["has_path"]:
             continue
             
-        add_sample(u, v, is_induced=False)
-    
-    # =========================================================================
-    # NEW: Ensure ALL graph edges are included in training data
-    # =========================================================================
-    print("Ensuring all graph edges are in training data...")
-    missing_edges = []
+        # Add all simple paths (P)
+        for path in data["paths"]:
+            all_samples.append({"text": format_path_string(u, v, "P", path), "type": "P", "u": u, "v": v})
+            
+        # Add all shortest paths (S)
+        for shortest in data["shortest_paths"]:
+            all_samples.append({"text": format_path_string(u, v, "S", shortest), "type": "S", "u": u, "v": v})
+            
+    # 2. Add all edges as explicit shortest paths (S)
+    # "since both are edges you can add 5 4 S 5 4"
+    print("Adding explicit edge samples...")
     for u, v in G.edges():
-        if (u, v) not in train_pairs:
-            missing_edges.append((u, v))
-            train_pairs.add((u, v))
-            train_data.append({"text": format_path_string(u, v, "S", [u, v])})
+        shortest = [u, v]
+        # Check if already added (edges are shortest paths)
+        # But explicitly adding them ensures coverage
+        all_samples.append({"text": format_path_string(u, v, "S", shortest), "type": "S", "u": u, "v": v})
+
+    # Shuffle everything
+    print(f"Total samples collected: {len(all_samples)}")
+    random.shuffle(all_samples)
+    
+    # 3. Split 80/20
+    split_idx = int(len(all_samples) * 0.8)
+    train_data_full = all_samples[:split_idx]
+    test_data_full = all_samples[split_idx:]
+    
+    # 4. CRITICAL: Ensure ALL edges are in training set
+    # Strategy: Find missing edges in train, move them from test (or duplicate if missing)
+    print("Ensuring all 1-hop edges are in training set...")
+    train_edges_covered = set()
+    
+    # Check what we have
+    for item in train_data_full:
+        # Extract path from text: "u v T n1 n2 ..."
+        parts = item['text'].split()
+        path = [int(x) for x in parts[3:]]
+        for i in range(len(path) - 1):
+            train_edges_covered.add((path[i], path[i+1]))
+            
+    # Find missing
+    graph_edges = set(G.edges())
+    missing_edges = graph_edges - train_edges_covered
     
     if missing_edges:
-        print(f"  Added {len(missing_edges)} missing edges: {missing_edges}")
+        print(f"  Found {len(missing_edges)} edges missing from training set. Injecting them...")
+        for u, v in missing_edges:
+            # Create the sample
+            sample = {"text": format_path_string(u, v, "S", [u, v]), "type": "S", "u": u, "v": v}
+            train_data_full.append(sample)
     else:
-        print("  All edges were already included!")
-    # =========================================================================
-        
-    print(f"Training set generated with {len(train_pairs)} pairs and {len(train_data)} samples.")
+        print("  All edges covered in random split.")
+
+    # Assign to final variables
+    train_data = train_data_full
+    test_data = test_data_full
     
-    # --- Testing Set Generation ---
-    print("Generating testing set...")
-    test_data = []
-    test_pairs_count = 0
-    
-    for u, v in connected_pairs:
-        if (u, v) not in train_pairs:
-            test_pairs_count += 1
-            data = all_pairs_data[(u, v)]
-            
-            path = random.choice(data["paths"])
-            test_data.append({"text": format_path_string(u, v, "P", path)})
-            
-            shortest = random.choice(data["shortest_paths"])
-            test_data.append({"text": format_path_string(u, v, "S", shortest)})
-            
-    print(f"Testing set generated with {test_pairs_count} pairs and {len(test_data)} samples.")
+    print(f"Training set: {len(train_data)} samples")
+    print(f"Testing set:  {len(test_data)} samples")
 
     # --- Save Data ---
     
