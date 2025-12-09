@@ -88,11 +88,22 @@ def main():
     print(f"Vocabulary size: {vocab_size}")
     print(f"EOS Token ID: {stoi['<EOS>']}")
 
+    def process_val_data(s, stoi):
+        """Process validation text into tokens WITHOUT EOS (prompts only)."""
+        split_text = s.split('\n')
+        ret = []
+        for st in split_text:
+            if st.strip() != "":
+                enc_str = encode_string(st, stoi)
+                # NO EOS for validation prompts
+                ret += enc_str
+        return ret
+
     # Process the data
     print("Tokenizing training data...")
     train_ids = process_data(train_data, stoi)
-    print("Tokenizing validation data...")
-    val_ids = process_data(val_data, stoi)
+    print("Tokenizing validation data (no EOS)...")
+    val_ids = process_val_data(val_data, stoi)
 
     print(f"Train has {len(train_ids):,} tokens")
     print(f"Val has {len(val_ids):,} tokens")
