@@ -98,15 +98,16 @@ def main():
         # Decode sample to understand what it is
         sample_strs = [itos[t] for t in sample_tokens]
         
-        if len(sample_strs) < 3:
+        if len(sample_strs) < 4: # Need at least Source Target Type %
             continue 
             
         source_str = sample_strs[0]
         target_str = sample_strs[1]
         type_str = sample_strs[2]
+        # delimiter is [3] which is '%'
         
         # Prepare Prompt
-        prompt_tokens = sample_tokens[:3] # Source, Target, Type
+        prompt_tokens = sample_tokens[:4] # Source, Target, Type, %
         input_ids = torch.tensor([prompt_tokens], dtype=torch.long)
         attention_mask = torch.ones_like(input_ids) # All ones since no padding in prompt
         
@@ -136,10 +137,16 @@ def main():
             
         generated_strs = [itos[t] for t in new_ids]
         
-        # Strict check: Generated path must start with source?
-        # User said "just complete the generated portion".
-        # If prompt is "0 6 P", output should be "0 2 ...".
-        # So we check the FULL generated string sequence.
+        # Verification Logic
+        # The prompt ends with %, so the model generates the PATH starting from the source node.
+        # e.g. Prompt: "3 37 P %", Model: "3 5 12 ..."
+        
+        full_generated_path_strs = generated_strs
+        
+        # Explicit check: If path doesn't start with source, it's invalid (but we can flag it)
+        # Or should we assume the prompt implies the source? 
+        # Usually path string includes source. "5 19 P % 5 19"
+        # So we expect the generated string to start with Source.
         
         full_generated_path_strs = generated_strs
         

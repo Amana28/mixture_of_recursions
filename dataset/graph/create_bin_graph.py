@@ -130,11 +130,11 @@ def main():
         for line in val_lines:
             line = line.strip()
             if line:
-                # "source target type" are the first 3 tokens
-                # encoded: [s, t, type, n1, n2, ...]
+                # "source target type %" are the first 4 tokens
+                # encoded: [s, t, type, %, n1, n2, ...]
                 enc_str = encode_string(line, stoi)
-                if len(enc_str) >= 3:
-                    prompt_ids = enc_str[:3] # Keep first 3
+                if len(enc_str) >= 4:
+                    prompt_ids = enc_str[:4] # Keep first 4 (S T Type %)
                     test_ids += prompt_ids   # Append continuously (no EOS)
         
         print(f"Test has {len(test_ids):,} tokens (prompts only)")

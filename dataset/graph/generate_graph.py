@@ -40,7 +40,7 @@ def format_path_string(source, target, type_char, path):
     e.g. '5 19 P 5 23 8 19'
     """
     path_str = " ".join(map(str, path))
-    return f"{source} {target} {type_char} {path_str}"
+    return f"{source} {target} {type_char} % {path_str}"
 
 def main():
     parser = argparse.ArgumentParser()
