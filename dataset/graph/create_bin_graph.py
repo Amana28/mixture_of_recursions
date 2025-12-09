@@ -37,14 +37,15 @@ def main():
     # =========================================================================
     train_lines = lines # Use ALL train lines
     
-    # Load validation data
-    val_file_path = os.path.join(data_dir, 'val.txt')
+    # Load validation data (from test.txt which has full paths)
+    val_file_path = os.path.join(data_dir, 'test.txt')
     if os.path.exists(val_file_path):
         print(f"Loading validation data from: {val_file_path}")
         with open(val_file_path, 'r') as f:
             val_lines = f.readlines()
     else:
-        print("WARNING: val.txt not found! Using 10% of train as fallback.")
+        print("WARNING: test.txt not found! Validation will be empty.")
+        val_lines = []
         val_sample_size = int(len(lines) * 0.1)
         val_lines = random.sample(lines, val_sample_size)
 
@@ -106,30 +107,39 @@ def main():
     # Process the data
     print("Tokenizing training data...")
     train_ids = process_lines(train_lines, stoi)
-    print("Tokenizing validation data...")
+    
+    # Validation data (val.bin) uses Full Paths from val_lines (which is loaded from test.txt now)
+    print("Tokenizing validation data (Full Paths)...")
     val_ids = process_lines(val_lines, stoi)
 
     print(f"Train has {len(train_ids):,} tokens")
     print(f"Val has {len(val_ids):,} tokens")
 
-    # Process test data (prompts only, no EOS)
-    test_file_path = os.path.join(data_dir, 'test.txt')
+    # Process test data (test.bin) - STRIP PATHS ON THE FLY
+    # test.txt now contains FULL paths, so we must strip them here
+    # We want: source target type (3 tokens) NO EOS
+    
     test_ids = []
-    if os.path.exists(test_file_path):
-        print(f"Loading test data from: {test_file_path}")
-        with open(test_file_path, 'r') as f:
-            test_lines = f.readlines()
+    # Reuse val_lines because it contains the content of test.txt (if loaded correctly)
+    # or reload it to be safe/explicit?
+    # Let's use val_lines since we just loaded it from the validation source (which should be test.txt)
+    
+    if val_lines:
+        print(f"Generating test.bin (Prompts Only) from {len(val_lines)} samples...")
         
-        # Process without EOS
-        for line in test_lines:
+        for line in val_lines:
             line = line.strip()
             if line:
+                # "source target type" are the first 3 tokens
+                # encoded: [s, t, type, n1, n2, ...]
                 enc_str = encode_string(line, stoi)
-                test_ids += enc_str  # No EOS for test prompts
+                if len(enc_str) >= 3:
+                    prompt_ids = enc_str[:3] # Keep first 3
+                    test_ids += prompt_ids   # Append continuously (no EOS)
         
-        print(f"Test has {len(test_ids):,} tokens ({len(test_lines)} prompts)")
+        print(f"Test has {len(test_ids):,} tokens (prompts only)")
     else:
-        print("No test.txt found, skipping test.bin generation.")
+        print("No validation lines found, skipping test.bin generation.")
 
     # Export to binary files
     train_ids = np.array(train_ids, dtype=np.uint16)
