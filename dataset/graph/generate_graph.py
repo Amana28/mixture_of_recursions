@@ -222,7 +222,12 @@ def main():
             
     print(f"Testing set generated with {test_pairs_count} pairs and {len(test_data)} samples.")
 
-    # Save the master dataset (all pairs info)
+    # --- Save Data ---
+    
+    # 1. Save Master Dataset (JSON) for Validation
+    master_file = os.path.join(args.output_dir, "graph_data.json")
+    print(f"Saving master dataset to {master_file}...")
+    
     # Convert sets/tuples to lists for JSON
     master_export = []
     for (u, v), data in all_pairs_data.items():
@@ -234,9 +239,35 @@ def main():
             "shortest_paths": data["shortest_paths"]
         }
         master_export.append(entry)
-        
-    with open(os.path.join(args.output_dir, "master_dataset.json"), "w") as f:
-        json.dump(master_export, f) # No indent to save space if huge
+
+    with open(master_file, 'w') as f:
+        json.dump(master_export, f, indent=2)
+
+    # 2. Save Training Data (TXT) - Full Paths
+    train_file = os.path.join(args.output_dir, "train.txt")
+    print(f"Saving training data to {train_file}...")
+    with open(train_file, 'w') as f:
+        for item in train_data:
+            # item['text'] is already "source target type path..."
+            # We just write it as a line.
+            f.write(item['text'] + "\n")
+
+    # 3. Save Test Data (TXT) - Prompts Only
+    test_file = os.path.join(args.output_dir, "test.txt")
+    print(f"Saving test data to {test_file}...")
+    with open(test_file, 'w') as f:
+        for item in test_data:
+            # We want "source target type" only
+            parts = item['text'].split()
+            # source, target, type are the first 3 tokens
+            prompt = " ".join(parts[:3])
+            f.write(prompt + "\n")
+
+    print(f"Data generation complete! Output directory: {args.output_dir}")
+    print(f"  - Graph Edges: graph_edges.json")
+    print(f"  - Master Dataset: graph_data.json")
+    print(f"  - Training Data: train.txt")
+    print(f"  - Test Data: test.txt")
 
 if __name__ == "__main__":
     main()
