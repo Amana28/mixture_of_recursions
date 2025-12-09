@@ -113,13 +113,17 @@ def main():
         # Prepare Prompt
         prompt_tokens = sample_tokens[:3] # Source, Target, Type
         input_ids = torch.tensor([prompt_tokens], dtype=torch.long)
+        attention_mask = torch.ones_like(input_ids) # All ones since no padding in prompt
+        
         if torch.cuda.is_available():
             input_ids = input_ids.cuda()
+            attention_mask = attention_mask.cuda()
             
         # Generate
         with torch.no_grad():
             output_ids = model.generate(
                 input_ids,
+                attention_mask=attention_mask,
                 max_new_tokens=args.max_new_tokens,
                 pad_token_id=eos_token_id,
                 eos_token_id=eos_token_id,
