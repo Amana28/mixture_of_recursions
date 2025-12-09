@@ -81,7 +81,9 @@ if not os.path.exists(meta_path):
 with open(meta_path, 'rb') as f:
     meta = pickle.load(f)
 vocab_size = meta['vocab_size']
+padding_id = meta.get('padding_id', 0) # Default to 0 if not found (though create_bin should have it)
 print(f"Found vocab_size = {vocab_size}")
+print(f"Padding ID: {padding_id} (targets will be -100)")
 
 # Load Data (Memmap)
 train_path = os.path.join(data_dir, 'train.bin')
@@ -112,6 +114,10 @@ def get_batch(split):
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
     
+    # IGNORE PADDING IN LOSS
+    # Standard PyTorch CrossEntropyLoss uses ignore_index=-100
+    y[y == padding_id] = -100
+
     if device_type == 'cuda':
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
     else:
