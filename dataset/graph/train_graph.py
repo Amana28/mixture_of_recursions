@@ -1,33 +1,18 @@
 import os
-# Suppress TensorFlow/XLA warnings
+# Suppress TF/XLA warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 import pickle
 import numpy as np
 import torch
-from torch.utils.data import Dataset
-from transformers import LlamaConfig, LlamaForCausalLM, Trainer, TrainingArguments, DataCollatorForLanguageModeling, TrainerCallback
-import argparse
 import logging
+from torch.utils.data import Dataset
+from transformers import LlamaConfig, LlamaForCausalLM, Trainer, TrainingArguments, DataCollatorForLanguageModeling
+import argparse
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logger = logging.getLogger(__name__)
-
-class PrinterCallback(TrainerCallback):
-    """
-    Custom callback to print training stats in a clean format.
-    """
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs:
-            # Filter out some keys if needed
-            loss = logs.get("loss", None)
-            epoch = logs.get("epoch", None)
-            lr = logs.get("learning_rate", None)
-            
-            if loss is not None:
-                print(f"Epoch {epoch:.2f} | Loss: {loss:.4f} | LR: {lr:.2e}")
+# Reduce HF logging
+logging.getLogger("transformers").setLevel(logging.ERROR)
 
 class GraphBinDataset(Dataset):
     """
@@ -132,8 +117,7 @@ def main():
         model=model,
         args=training_args,
         train_dataset=dataset,
-        data_collator=None, # Default collator works for dicts of tensors
-        callbacks=[PrinterCallback()]
+        data_collator=None # Default collator works for dicts of tensors
     )
 
     print("Starting training...")

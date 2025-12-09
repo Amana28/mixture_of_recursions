@@ -92,17 +92,15 @@ def main():
     optimal_count = 0
     
     print(f"\nTesting {len(test_samples)} samples...")
+    print(f"{'Sample':<50} | {'Status'}")
+    print("-" * 60)
     
     for sample_tokens in tqdm(test_samples):
         # Decode sample to understand what it is
-        # Format: Source Target Type Path...
-        # We only want to feed "Source Target Type" as prompt
-        
-        # Convert tokens to strings
         sample_strs = [itos[t] for t in sample_tokens]
         
         if len(sample_strs) < 3:
-            continue # Malformed sample
+            continue 
             
         source_str = sample_strs[0]
         target_str = sample_strs[1]
@@ -121,7 +119,7 @@ def main():
                 max_new_tokens=args.max_new_tokens,
                 pad_token_id=eos_token_id,
                 eos_token_id=eos_token_id,
-                do_sample=False # Greedy decoding for deterministic results
+                do_sample=False 
             )
             
         # Decode Output
@@ -129,94 +127,90 @@ def main():
         # Remove prompt from generated
         new_ids = generated_ids[len(prompt_tokens):]
         
-        # Stop at EOS if present (generate might include it)
+        # Stop at EOS
         if eos_token_id in new_ids:
             new_ids = new_ids[:new_ids.index(eos_token_id)]
             
         generated_strs = [itos[t] for t in new_ids]
-        full_generated_path_strs = [source_str] + generated_strs # Add source back for full path check
         
-        # --- Verification ---
+        # Strict check: Generated path must start with source?
+        # User said "just complete the generated portion".
+        # If prompt is "0 6 P", output should be "0 2 ...".
+        # So we check the FULL generated string sequence.
+        
+        full_generated_path_strs = generated_strs
+        
+        # Verification Status Sign
+        # "" = Correct
+        # "*" = Wrong
+        # "-" = Suboptimal
+        
+        sign = "*" # Default to wrong
+        
         try:
             source = int(source_str)
             target = int(target_str)
             
             # Parse generated path
-            # It should be a sequence of integers
-            generated_path = []
-            try:
-                # The model output should be just the intermediate nodes + target?
-                # Wait, the training format is: "S T Type S n1 n2 ... T"
-                # So the prompt is "S T Type". The completion starts with "S".
-                # Let's check the generated strings.
-                generated_path = [int(s) for s in full_generated_path_strs]
-            except ValueError:
-                # Generated non-integer tokens
-                status = "INVALID_FORMAT"
-                generated_path = []
+            generated_path = [int(s) for s in full_generated_path_strs]
 
             if not generated_path:
-                status = "INVALID_FORMAT"
+                sign = "*"
             else:
-                # Check against Master Data
-                if (source, target) in master_lookup:
+                # STRICT CHECK: Must start with source and end with target
+                if generated_path[0] != source:
+                     sign = "*"
+                elif generated_path[-1] != target:
+                     sign = "*"
+                elif (source, target) in master_lookup:
                     entry = master_lookup[(source, target)]
                     
                     if not entry["has_path"]:
-                         # Should not happen in test set usually
-                        status = "NO_PATH_EXISTS"
+                        sign = "*" # Should not happen if test set is valid
                     else:
-                        # 1. Is it a valid path in the graph?
-                        # We can check if it exists in entry["paths"] (if small enough)
-                        # Or reconstruct graph. But checking entry["paths"] is safer if we saved all.
-                        # However, for large graphs, "paths" might be truncated.
-                        # Let's trust the "paths" list if it's there.
-                        
-                        # Convert generated path to list of ints for comparison
-                        # entry["paths"] is list of lists of ints
-                        
+                        # Check if valid path in graph
+                        # We check if this exact sequence is in the list of valid paths
                         is_valid = generated_path in entry["paths"]
                         
                         if is_valid:
                             valid_path_count += 1
-                            status = "VALID"
                             
-                            # 2. Is it optimal? (Only for 'S' type)
                             if type_str == 'S':
-                                # Check length against shortest paths
+                                # Check optimality
                                 shortest_len = len(entry["shortest_paths"][0])
                                 gen_len = len(generated_path)
                                 
                                 if gen_len == shortest_len:
                                     optimal_count += 1
-                                    status = "OPTIMAL"
+                                    sign = "" # Correct & Optimal
                                 else:
-                                    status = "SUB_OPTIMAL"
+                                    sign = "-" # Suboptimal
                             else:
-                                # For 'P' type, valid is enough
-                                correct_count += 1 # Count as correct
-                                status = "VALID_P"
+                                # Type P
+                                correct_count += 1
+                                sign = "" # Correct
                         else:
-                            status = "INVALID_PATH"
+                            sign = "*" # Invalid path
                 else:
-                    status = "UNKNOWN_PAIR"
+                    sign = "*" # Unknown pair
 
-        except Exception as e:
-            status = f"ERROR: {e}"
+        except Exception:
+            sign = "*"
 
-        results.append({
-            "prompt": f"{source_str} {target_str} {type_str}",
-            "generated": " ".join(generated_strs),
-            "status": status
-        })
+        # Format Output
+        prompt_text = f"{source_str} {target_str} {type_str}"
+        gen_text = " ".join(generated_strs)
+        full_text = f"{prompt_text} {gen_text}"
         
+        results.append(f"{full_text} | {sign}")
+
     # --- Summary ---
     print("\n" + "="*30)
     print("TEST SUMMARY")
     print("="*30)
     print(f"Total Samples: {len(results)}")
     print(f"Valid Paths: {valid_path_count}")
-    print(f"Optimal Paths (S-type): {optimal_count}")
+    print(f"Optimal Paths: {optimal_count}")
     
     # Save Summary
     summary_path = os.path.join(args.data_dir, "test_summary.txt")
@@ -225,8 +219,8 @@ def main():
         f.write(f"Valid Paths: {valid_path_count}\n")
         f.write(f"Optimal Paths: {optimal_count}\n")
         f.write("\nDetailed Results:\n")
-        for res in results:
-            f.write(f"{res['prompt']} -> {res['generated']} | {res['status']}\n")
+        for line in results:
+            f.write(line + "\n")
             
     print(f"Summary saved to {summary_path}")
 
