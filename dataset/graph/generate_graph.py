@@ -14,10 +14,10 @@ def generate_graph(num_nodes, sparsity, seed=42):
     G = nx.gnp_random_graph(num_nodes, sparsity, directed=True, seed=seed)
     return G
 
-def generate_random_simple_paths(G, source, target, num_paths, max_attempts=None):
+def generate_random_simple_paths(G, source, target, num_paths, reachability_set, max_attempts=None):
     """
     Generates up to 'num_paths' unique random simple paths from source to target.
-    Uses randomized DFS with lookahead to ensure reachability.
+    Uses randomized DFS with lookahead (O(1) lookup) to ensure reachability.
     """
     paths = set()
     if max_attempts is None:
@@ -25,8 +25,8 @@ def generate_random_simple_paths(G, source, target, num_paths, max_attempts=None
         
     attempts = 0
     
-    # Pre-check reachability (though caller likely checked)
-    if not nx.has_path(G, source, target):
+    # Pre-check reachability
+    if (source, target) not in reachability_set:
         return []
 
     while len(paths) < num_paths and attempts < max_attempts:
@@ -44,8 +44,8 @@ def generate_random_simple_paths(G, source, target, num_paths, max_attempts=None
             for n in neighbors:
                 if n not in visited:
                     # Lookahead: Can n reach target?
-                    # For small graphs (N=30-100), nx.has_path is fast.
-                    if nx.has_path(G, n, target):
+                    # Check pre-computed reachability set (O(1)) instead of BFS
+                    if (n, target) in reachability_set:
                         current = n
                         path.append(n)
                         visited.add(n)
@@ -138,6 +138,12 @@ def main():
     
     targets_seen_in_train = set()
     
+    # Create Reachability Lookup for Fast Generation
+    # (u, v) -> True if path exists
+    # We can just use the set of keys where has_path is True
+    print("Building reachability lookup table...")
+    reachable_lookup = {pair for pair, data in all_pairs_data.items() if data["has_path"]}
+    
     # Iterate through all reachable pairs
     reachable_pairs = [pair for pair, data in all_pairs_data.items() if data["has_path"]]
     # Shuffle isn't strictly requested but "iterates through all possible pair (source, target)".
@@ -178,7 +184,25 @@ def main():
             
         # P: Random Simple Paths
         # Use randomized DFS generator for efficiency
-        chosen_paths = generate_random_simple_paths(G, u, v, args.num_paths)
+        # We need a quick way to check reachability.
+        # Construct the set of ALL reachable pairs from all_pairs_data for fast lookups.
+        # But we only need it once. Let's build it before the loop.
+        # Oh, we are inside the loop. Let's move it outside.
+        
+        # NOTE: I will handle the set creation in the previous chunk or here if efficient.
+        # Actually, let's just build it once before the loop.
+        # Since I can't edit outside this block easily without context, I'll rely on a global or passing it.
+        # Optimization: We can just use all_pairs_data for lookup if keys exist.
+        # But for 'n' (neighbor) -> 'target', we need to know if (n, target) has path.
+        # all_pairs_data contains path info for ALL pairs.
+        # So we can just checking: all_pairs_data[(n, target)]["has_path"].
+        
+        # But wait, generate_random_simple_paths doesn't have access to all_pairs_data.
+        # So I *must* pass a set or dict.
+        
+        # Let's assume I created 'reachable_lookup' before the loop.
+        
+        chosen_paths = generate_random_simple_paths(G, u, v, args.num_paths, reachable_lookup)
             
         for p in chosen_paths:
             dataset.append({"text": format_path_string(u, v, "P", p)})
