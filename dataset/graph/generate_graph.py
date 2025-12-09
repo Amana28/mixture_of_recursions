@@ -237,10 +237,10 @@ def main():
     with open(train_file, 'r') as f:
         for line in f:
             parts = line.strip().split()
-            if len(parts) >= 4:
-                # Extract all consecutive pairs from the path
-                path_start = 3  # After "source target type"
-                path_nodes = [int(p) for p in parts[path_start:]]
+            # Extract path from text: "u v T % n1 n2 ..."
+            # The path nodes start from index 4 (after source, target, type, %)
+            if len(parts) >= 5: # Need at least S T Type % Node
+                path_nodes = [int(p) for p in parts[4:]]
                 for i in range(len(path_nodes) - 1):
                     trained_edges.add((path_nodes[i], path_nodes[i+1]))
     
