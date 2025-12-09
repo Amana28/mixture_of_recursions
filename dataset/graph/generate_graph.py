@@ -43,6 +43,11 @@ def format_path_string(source, target, type_char, path):
     return f"{source} {target} {type_char} {path_str}"
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--num_nodes", type=int, default=100)
+    parser.add_argument("--sparsity", type=float, default=0.1)
+    parser.add_argument("--output_dir", type=str, default="dataset/graph")
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--train_split", type=float, default=0.8, help="Probability of assigning a pair to train (unless forced)")
     parser.add_argument("--num_paths", type=int, default=10, help="Number of random simple paths per pair")
     parser.add_argument("--num_shortest_paths", type=int, default=10, help="Number of shortest paths per pair")
