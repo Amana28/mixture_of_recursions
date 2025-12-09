@@ -1,6 +1,9 @@
 """
-Converts text graph data to binary format for training.
-Trains on ALL of train.txt, duplicates a portion for validation (loss tracking only).
+Converts text graph data to binary format for training with PADDING.
+Updates:
+1. Removes 'P' tokens.
+2. Uses '\\n' as delimiter/EOS.
+3. Pads all sequences to fixed block size (max length found).
 """
 
 import os
@@ -12,176 +15,176 @@ import argparse
 def main():
     parser = argparse.ArgumentParser(description='Create the binary dataset from text files.')
     parser.add_argument('--data_dir', type=str, required=True, help='Directory containing train.txt')
-    parser.add_argument('--val_ratio', type=float, default=0.2, help='Fraction of train data to COPY for validation (not remove)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for sampling')
     args = parser.parse_args()
 
     data_dir = args.data_dir
     train_file_path = os.path.join(data_dir, 'train.txt')
+    # Validation comes from test.txt (full paths)
+    val_file_path = os.path.join(data_dir, 'test.txt')
 
     print(f"Loading training data from: {train_file_path}")
 
     try:
         with open(train_file_path, 'r') as f:
-            lines = f.readlines()
-        print(f"Total lines in train.txt: {len(lines)}")
+            train_lines = f.readlines()
+        print(f"Total lines in train.txt: {len(train_lines)}")
+        
+        if os.path.exists(val_file_path):
+            with open(val_file_path, 'r') as f:
+                val_lines = f.readlines()
+            print(f"Total lines in test.txt (used for validation): {len(val_lines)}")
+        else:
+            val_lines = []
+            print("WARNING: test.txt not found. Validation set will be empty.")
+            
     except FileNotFoundError as e:
         print(f"Error: {e}")
-        print("Please make sure you've generated the text files first using generate_graph.py.")
         exit(1)
 
     random.seed(args.seed)
-    
-    # =========================================================================
-    # NEW LOGIC: Train on train.txt, Validate on val.txt (unseen data)
-    # =========================================================================
-    train_lines = lines # Use ALL train lines
-    
-    # Load validation data (from test.txt which has full paths)
-    val_file_path = os.path.join(data_dir, 'test.txt')
-    if os.path.exists(val_file_path):
-        print(f"Loading validation data from: {val_file_path}")
-        with open(val_file_path, 'r') as f:
-            val_lines = f.readlines()
-    else:
-        print("WARNING: test.txt not found! Validation will be empty.")
-        val_lines = []
-        val_sample_size = int(len(lines) * 0.1)
-        val_lines = random.sample(lines, val_sample_size)
-
-    print(f"Train samples: {len(train_lines)}")
-    print(f"Val samples: {len(val_lines)}")
-    # =========================================================================
 
     # Combine for vocab building
-    all_data = ''.join(lines)
+    all_lines = train_lines + val_lines
+    all_text_combined = " ".join(all_lines)
 
-    def find_unique_tokens(data_string):
-        """Find all unique tokens in the data string (space separated)."""
-        tokens = data_string.split()
-        return set(tokens)
-
-    def encode_string(s, stoi):
-        """Encode a string to a list of integers."""
-        ss = s.split()
-        encoded_string = [stoi[ch] for ch in ss if ch in stoi]
-        return encoded_string
-
-    def process_lines(lines_list, stoi):
-        """Process lines into tokens with EOS."""
-        ret = []
-        eos_id = stoi['<EOS>']
-        for line in lines_list:
-            line = line.strip()
-            if line:
-                enc_str = encode_string(line, stoi)
-                enc_str = enc_str + [eos_id]  # Append EOS
-                ret += enc_str
-        return ret
-
-    # Get all unique tokens
-    tokens = sorted(list(find_unique_tokens(all_data)))
-    print(f"Found {len(tokens)} unique tokens.")
-
-    # Create mappings
+    # 1. Build Vocabulary
+    # Removing 'P' from the set if it exists in data, or just ignore it during encoding.
+    # We want unique tokens from the data, but we explicitly filter out 'P'.
+    
+    unique_tokens = set(all_text_combined.split())
+    # Remove 'P' and '%' if we want only numbers? 
+    # User said: "remove P tokens". 
+    # The delimiter '%' might still be useful or user said "add new line tokens as well".
+    # User example: split_text = s.split('\n') -> enc_str + [0] (newline token).
+    
+    # Let's keep '%' as a separator if it's there, but remove 'P'.
+    if 'P' in unique_tokens:
+        unique_tokens.remove('P')
+        
+    # We need a special newline/EOS token.
+    # In the example, it seems '\n' is added to vocab.
+    
+    vocab_tokens = sorted(list(unique_tokens))
+    
     stoi = {}
     itos = {}
     idx = 0
-
-    # Add special EOS token first
-    stoi['<EOS>'] = idx
-    itos[idx] = '<EOS>'
-    idx += 1
-
-    # Add all other tokens
-    for token in tokens:
-        if token not in stoi:
-            stoi[token] = idx
-            itos[idx] = token
-            idx += 1
-
-    vocab_size = len(stoi)
-    print(f"Vocabulary size: {vocab_size}")
-    print(f"EOS Token ID: {stoi['<EOS>']}")
-
-    # Process the data
-    print("Tokenizing training data...")
-    train_ids = process_lines(train_lines, stoi)
     
-    # Validation data (val.bin) uses Full Paths from val_lines (which is loaded from test.txt now)
-    print("Tokenizing validation data (Full Paths)...")
-    val_ids = process_lines(val_lines, stoi)
-
-    print(f"Train has {len(train_ids):,} tokens")
-    print(f"Val has {len(val_ids):,} tokens")
-
-    # Process test data (test.bin) - STRIP PATHS ON THE FLY
-    # test.txt now contains FULL paths, so we must strip them here
-    # We want: source target type (3 tokens) NO EOS
+    # Add special tokens
+    # 0 is usually padding or newline in the example.
+    # Example used: enc_str + [0] # Add newline token
+    # Let's define:
+    # 0 = \n (NEWLINE / EOS) -> acts as end of sequence
+    # But we also need PADDING if we want fixed length.
+    # Usually 0 is padding.
+    # User example: "Updated to remove padding... works with fixed size training sequences" 
+    # Wait, the user example says "Updated to remove padding" in comments but the user request says "can you implement paddinf for me".
+    # The user request "can you implement paddinf" takes precedence.
     
-    test_ids = []
-    # Reuse val_lines because it contains the content of test.txt (if loaded correctly)
-    # or reload it to be safe/explicit?
-    # Let's use val_lines since we just loaded it from the validation source (which should be test.txt)
+    # Let's use:
+    # 0 = [PAD] (Padding)
+    # 1 = \n (Newline/EOS)
     
-    if val_lines:
-        print(f"Generating test.bin (Prompts Only) from {len(val_lines)} samples...")
+    stoi['[PAD]'] = idx; itos[idx] = '[PAD]'; idx += 1
+    stoi['\n'] = idx;    itos[idx] = '\n';    idx += 1
+    
+    for t in vocab_tokens:
+        stoi[t] = idx
+        itos[idx] = t
+        idx += 1
         
-        for line in val_lines:
-            line = line.strip()
-            if line:
-                # "source target type %" are the first 4 tokens
-                # encoded: [s, t, type, %, n1, n2, ...]
-                enc_str = encode_string(line, stoi)
-                if len(enc_str) >= 4:
-                    prompt_ids = enc_str[:4] # Keep first 4 (S T Type %)
-                    test_ids += prompt_ids   # Append continuously (no EOS)
+    print(f"Vocab Size: {len(stoi)}")
+    print(f"Tokens: {vocab_tokens}")
+    
+    # 2. Helper Functions
+    def encode_line(line):
+        """
+        Encodes a line (string) into IDs. 
+        Removes 'P' token if present.
+        """
+        tokens = line.strip().split()
+        # Filter 'P'
+        tokens = [t for t in tokens if t != 'P']
         
-        print(f"Test has {len(test_ids):,} tokens (prompts only)")
-    else:
-        print("No validation lines found, skipping test.bin generation.")
+        ids = []
+        for t in tokens:
+            if t in stoi:
+                ids.append(stoi[t])
+            # else skip?
+            
+        return ids
 
-    # Export to binary files
+    # 3. Determine Block Size (Max Length)
+    max_len = 0
+    
+    # Check max length including the \n token
+    for line in all_lines:
+        ids = encode_line(line)
+        length = len(ids) + 1 # +1 for \n
+        if length > max_len:
+            max_len = length
+            
+    print(f"Max Sequence Length (Block Size) found: {max_len}")
+    
+    # 4. Process and Pad Data
+    def process_data(lines, block_size):
+        data_ids = []
+        pad_id = stoi['[PAD]']
+        nl_id = stoi['\n']
+        
+        for line in lines:
+            ids = encode_line(line)
+            # Add Newline
+            ids.append(nl_id)
+            
+            # Pad to block_size
+            if len(ids) < block_size:
+                padding = [pad_id] * (block_size - len(ids))
+                ids = ids + padding
+            else:
+                # Truncate if somehow longer (shouldn't happen given max_len logic)
+                ids = ids[:block_size]
+                
+            data_ids.extend(ids)
+            
+        return data_ids
+
+    print("Processing and padding training data...")
+    train_ids = process_data(train_lines, max_len)
+    
+    print("Processing and padding validation data...")
+    val_ids = process_data(val_lines, max_len)
+    
+    # 5. Save Data
     train_ids = np.array(train_ids, dtype=np.uint16)
     val_ids = np.array(val_ids, dtype=np.uint16)
-
+    
     train_output = os.path.join(data_dir, 'train.bin')
     val_output = os.path.join(data_dir, 'val.bin')
-
-    print(f"Saving training data to: {train_output}")
-    print(f"Saving validation data to: {val_output}")
-
+    
+    print(f"Saving {len(train_ids)} tokens to {train_output}")
     train_ids.tofile(train_output)
+    
+    print(f"Saving {len(val_ids)} tokens to {val_output}")
     val_ids.tofile(val_output)
-
-    # Save test.bin if we have test data
-    if test_ids:
-        test_ids = np.array(test_ids, dtype=np.uint16)
-        test_output = os.path.join(data_dir, 'test.bin')
-        print(f"Saving test data to: {test_output}")
-        test_ids.tofile(test_output)
-
-    # Save metadata
+    
+    # 6. Save Meta
     meta = {
-        'vocab_size': vocab_size,
+        'vocab_size': len(stoi),
         'itos': itos,
         'stoi': stoi,
-        'eos_token': '<EOS>',
-        'eos_token_id': stoi['<EOS>']
+        'block_size': max_len, # Important for training script config
+        'padding_id': stoi['[PAD]'],
+        'eos_token_id': stoi['\n'] # Train script uses this for EOS usually
     }
-
+    
     meta_output = os.path.join(data_dir, 'meta.pkl')
-    print(f"Saving metadata to: {meta_output}")
-
     with open(meta_output, 'wb') as f:
         pickle.dump(meta, f)
-
-    print("\n" + "="*50)
-    print("Processing complete!")
-    print("="*50)
-    print(f"  train.bin: {len(train_lines)} samples (ALL training data)")
-    print(f"  val.bin:   {len(val_lines)} samples (validation set)")
-    print(f"  test.bin:  {len(val_lines) if len(test_ids) > 0 else 0} prompts")
+        
+    print(f"Saved metadata to {meta_output}")
+    print("Done.")
 
 if __name__ == "__main__":
     main()
