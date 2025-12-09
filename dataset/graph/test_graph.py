@@ -14,7 +14,7 @@ from tqdm import tqdm
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True, help="Path to trained model checkpoint")
-    parser.add_argument("--data_dir", type=str, required=True, help="Path to directory containing val.bin, meta.pkl, graph_data.json")
+    parser.add_argument("--data_dir", type=str, required=True, help="Path to directory containing test.bin, meta.pkl, graph_data.json")
     parser.add_argument("--output_dir", type=str, default=None, help="Directory to save test summary (defaults to model_path)")
     parser.add_argument("--num_samples", type=int, default=50, help="Number of samples to test")
     parser.add_argument("--max_new_tokens", type=int, default=20)
@@ -50,9 +50,9 @@ def main():
         print("Model moved to GPU.")
 
     # 3. Load Validation Data (Binary)
-    val_bin_path = os.path.join(args.data_dir, "val.bin")
-    val_data = np.fromfile(val_bin_path, dtype=np.uint16)
-    print(f"Loaded validation data: {len(val_data)} tokens")
+    test_bin_path = os.path.join(args.data_dir, "test.bin")
+    test_data = np.fromfile(test_bin_path, dtype=np.uint16)
+    print(f"Loaded test data: {len(test_data)} tokens")
 
     # 4. Load Master Dataset for Verification
     graph_data_path = os.path.join(args.data_dir, "graph_data.json")
@@ -70,7 +70,7 @@ def main():
     
     samples = []
     current_sample = []
-    for token in val_data:
+    for token in test_data:
         if token == eos_token_id:
             if current_sample:
                 samples.append(current_sample)

@@ -101,6 +101,25 @@ def main():
     print(f"Train has {len(train_ids):,} tokens")
     print(f"Val has {len(val_ids):,} tokens")
 
+    # Process test data (prompts only, no EOS)
+    test_file_path = os.path.join(data_dir, 'test.txt')
+    test_ids = []
+    if os.path.exists(test_file_path):
+        print(f"Loading test data from: {test_file_path}")
+        with open(test_file_path, 'r') as f:
+            test_lines = f.readlines()
+        
+        # Process without EOS
+        for line in test_lines:
+            line = line.strip()
+            if line:
+                enc_str = encode_string(line, stoi)
+                test_ids += enc_str  # No EOS for test prompts
+        
+        print(f"Test has {len(test_ids):,} tokens ({len(test_lines)} prompts)")
+    else:
+        print("No test.txt found, skipping test.bin generation.")
+
     # Export to binary files
     train_ids = np.array(train_ids, dtype=np.uint16)
     val_ids = np.array(val_ids, dtype=np.uint16)
@@ -113,6 +132,13 @@ def main():
 
     train_ids.tofile(train_output)
     val_ids.tofile(val_output)
+
+    # Save test.bin if we have test data
+    if test_ids:
+        test_ids = np.array(test_ids, dtype=np.uint16)
+        test_output = os.path.join(data_dir, 'test.bin')
+        print(f"Saving test data to: {test_output}")
+        test_ids.tofile(test_output)
 
     # Save metadata
     meta = {
