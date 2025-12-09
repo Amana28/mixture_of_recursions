@@ -1,6 +1,6 @@
 """
 Converts text graph data to binary format for training.
-Splits train.txt into train (80%) and val (20%) sets.
+Trains on ALL of train.txt, duplicates a portion for validation (loss tracking only).
 """
 
 import os
@@ -12,8 +12,8 @@ import argparse
 def main():
     parser = argparse.ArgumentParser(description='Create the binary dataset from text files.')
     parser.add_argument('--data_dir', type=str, required=True, help='Directory containing train.txt')
-    parser.add_argument('--val_split', type=float, default=0.2, help='Fraction of train data to use for validation')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed for splitting')
+    parser.add_argument('--val_ratio', type=float, default=0.2, help='Fraction of train data to COPY for validation (not remove)')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for sampling')
     args = parser.parse_args()
 
     data_dir = args.data_dir
@@ -30,16 +30,20 @@ def main():
         print("Please make sure you've generated the text files first using generate_graph.py.")
         exit(1)
 
-    # Shuffle and split
     random.seed(args.seed)
-    random.shuffle(lines)
     
-    split_idx = int(len(lines) * (1 - args.val_split))
-    train_lines = lines[:split_idx]
-    val_lines = lines[split_idx:]
+    # =========================================================================
+    # KEY CHANGE: Train on ALL data, COPY a subset for validation
+    # =========================================================================
+    train_lines = lines  # Use ALL lines for training
     
-    print(f"Train samples: {len(train_lines)}")
-    print(f"Val samples: {len(val_lines)}")
+    # Sample a subset for validation (these are COPIES, not removed from training)
+    val_sample_size = int(len(lines) * args.val_ratio)
+    val_lines = random.sample(lines, val_sample_size)
+    
+    print(f"Train samples: {len(train_lines)} (100% of data)")
+    print(f"Val samples: {len(val_lines)} (copied {args.val_ratio*100:.0f}% for loss tracking)")
+    # =========================================================================
 
     # Combine for vocab building
     all_data = ''.join(lines)
@@ -155,7 +159,12 @@ def main():
     with open(meta_output, 'wb') as f:
         pickle.dump(meta, f)
 
-    print("Processing complete.")
+    print("\n" + "="*50)
+    print("Processing complete!")
+    print("="*50)
+    print(f"  train.bin: {len(train_lines)} samples (ALL training data)")
+    print(f"  val.bin:   {len(val_lines)} samples (copied subset for loss tracking)")
+    print(f"  test.bin:  {len(test_lines) if len(test_ids) > 0 else 0} prompts")
 
 if __name__ == "__main__":
     main()
