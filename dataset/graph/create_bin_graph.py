@@ -181,7 +181,7 @@ def main():
     print("="*50)
     print(f"  train.bin: {len(train_lines)} samples (ALL training data)")
     print(f"  val.bin:   {len(val_lines)} samples (validation set)")
-    print(f"  test.bin:  {len(test_lines) if len(test_ids) > 0 else 0} prompts")
+    print(f"  test.bin:  {len(val_lines) if len(test_ids) > 0 else 0} prompts")
 
 if __name__ == "__main__":
     main()
