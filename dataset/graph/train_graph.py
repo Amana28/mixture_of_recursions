@@ -2,6 +2,10 @@
 Training script for Graph Path Prediction (Refactored Style)
 """
 import os
+# Suppress TF/XLA warnings immediately
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
 import sys
 import time
 import math
@@ -12,10 +16,6 @@ import numpy as np
 import torch
 import logging
 from transformers import LlamaConfig, LlamaForCausalLM
-
-# Suppress TF/XLA warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import warnings
 warnings.filterwarnings("ignore")
 
