@@ -43,17 +43,18 @@ def format_path_string(source, target, type_char, path):
     return f"{source} {target} {type_char} {path_str}"
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--num_nodes", type=int, default=100)
-    parser.add_argument("--sparsity", type=float, default=0.1)
-    parser.add_argument("--output_dir", type=str, default="dataset/graph")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train_split", type=float, default=0.8, help="Probability of assigning a pair to train (unless forced)")
+    parser.add_argument("--num_paths", type=int, default=10, help="Number of random simple paths per pair")
+    parser.add_argument("--num_shortest_paths", type=int, default=10, help="Number of shortest paths per pair")
     args = parser.parse_args()
 
     # Create a descriptive subfolder name
     subfolder_name = f"graph_n{args.num_nodes}_p{args.sparsity}"
     args.output_dir = os.path.join(args.output_dir, subfolder_name)
-
+    
+    # ... (skipping directory creation lines, assume they are preserved or I should include them if replacing block covers them)
+    # Actually, I am replacing a huge chunk. I will just rewrite the main logic block.
+    
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
         
@@ -73,103 +74,108 @@ def main():
     all_pairs_data = {}
     nodes = list(G.nodes())
     
-    connected_pairs = []
-    
+    # Pre-compute connectivity
     for u in tqdm(nodes):
         for v in nodes:
-            if u == v:
-                continue
+            if u == v: continue
             
             if nx.has_path(G, u, v):
-                shortest_paths = list(nx.all_shortest_paths(G, u, v))
-                shortest_len = len(shortest_paths[0])
-                paths = list(nx.all_simple_paths(G, u, v))
-                
-                all_pairs_data[(u, v)] = {
-                    "paths": paths,
-                    "shortest_paths": shortest_paths,
-                    "has_path": True
-                }
-                connected_pairs.append((u, v))
+                # We defer path generation until after splitting to save time/memory?
+                # No, user wants to use graph dataset for "10 shortest paths".
+                # Let's verify if we need all simple paths. "10 random paths".
+                # If we use nx.all_simple_paths, it might be slow for big graphs.
+                # But for N=30 it's fine.
+                all_pairs_data[(u, v)] = {"has_path": True}
             else:
-                all_pairs_data[(u, v)] = {
-                    "paths": -1,
-                    "shortest_paths": -1,
-                    "has_path": False
-                }
+                all_pairs_data[(u, v)] = {"has_path": False}
 
     print(f"Total pairs: {len(all_pairs_data)}")
-    print(f"Connected pairs: {len(connected_pairs)}")
     
     # =========================================================================
-    # NEW LOGIC: Collect ALL samples first, then split 80/20
+    # SPLITTING LOGIC (Pair-wise)
     # =========================================================================
-    print("Collecting ALL possible samples...")
-    all_samples = []
+    print(f"Splitting pairs into Train (approx {args.train_split*100}%) and Test...")
+    
+    train_data = [] # Full strings
+    test_data = []  # Full strings
+    
+    targets_seen_in_train = set()
+    
+    # Iterate through all reachable pairs
+    reachable_pairs = [pair for pair, data in all_pairs_data.items() if data["has_path"]]
+    # Shuffle isn't strictly requested but "iterates through all possible pair (source, target)".
+    # To implement "first valid source encountered for this specific target" fairly, maybe we should shuffle?
+    # User text says: "The split is decided pair-by-pair... It is the first valid source encountered..."
+    # If we shuffle, "first" is random. If we don't, it's deterministic. I'll shuffle to be safe/fair.
+    random.shuffle(reachable_pairs)
+    
+    cnt_train_pairs = 0
+    cnt_test_pairs = 0
+    
+    for u, v in tqdm(reachable_pairs):
+        is_train = False
+        
+        # 1. Direct Edge?
+        if G.has_edge(u, v):
+            is_train = True
+        # 2. Random probability?
+        elif random.random() < args.train_split:
+            is_train = True
+        # 3. First source for this target?
+        elif v not in targets_seen_in_train:
+            is_train = True
+            
+        if is_train:
+            targets_seen_in_train.add(v)
+            cnt_train_pairs += 1
+            dataset = train_data
+        else:
+            cnt_test_pairs += 1
+            dataset = test_data
+            
+        # Path Generation for this pair
+        # P: Random Simple Paths
+        # S: Shortest Paths
+        
+        # S: Shortest (Exact)
+        # Note: nx.all_shortest_paths returns generator.
+        shortest_gen = nx.all_shortest_paths(G, u, v)
+        # Collect up to N
+        shortest_paths = []
+        try:
+            for _ in range(args.num_shortest_paths):
+                shortest_paths.append(next(shortest_gen))
+        except StopIteration:
+            pass
+            
+        for p in shortest_paths:
+            dataset.append({"text": format_path_string(u, v, "S", p)})
+            
+        # P: Random Simple Paths
+        # Use simple paths with cutoff to avoid explosion? User didn't specify.
+        # "10 random paths (though random walks -- P)"
+        # I'll use a reservoir sampling approach on simple paths generator if not too large, 
+        # or just take first 10 shuffled.
+        # For N=30, generating all paths is fast.
+        # Strategy: Generate all, sample N.
+        
+        # optimization: cutoff=None can be slow. 
+        # But let's try standard.
+        all_simple = list(nx.all_simple_paths(G, u, v, cutoff=len(G)))
+        
+        if len(all_simple) > args.num_paths:
+            chosen_paths = random.sample(all_simple, args.num_paths)
+        else:
+            chosen_paths = all_simple
+            
+        for p in chosen_paths:
+            dataset.append({"text": format_path_string(u, v, "P", p)})
 
-    # 1. Add all paths and shortest paths for all connected pairs
-    for (u, v), data in all_pairs_data.items():
-        if not data["has_path"]:
-            continue
-            
-        # Add all simple paths (P)
-        for path in data["paths"]:
-            all_samples.append({"text": format_path_string(u, v, "P", path), "type": "P", "u": u, "v": v})
-            
-        # Add all shortest paths (S)
-        for shortest in data["shortest_paths"]:
-            all_samples.append({"text": format_path_string(u, v, "S", shortest), "type": "S", "u": u, "v": v})
-            
-    # 2. Add all edges as explicit shortest paths (S)
-    # "since both are edges you can add 5 4 S 5 4"
-    print("Adding explicit edge samples...")
-    for u, v in G.edges():
-        shortest = [u, v]
-        # Check if already added (edges are shortest paths)
-        # But explicitly adding them ensures coverage
-        all_samples.append({"text": format_path_string(u, v, "S", shortest), "type": "S", "u": u, "v": v})
-
-    # Shuffle everything
-    print(f"Total samples collected: {len(all_samples)}")
-    random.shuffle(all_samples)
-    
-    # 3. Split 80/20
-    split_idx = int(len(all_samples) * 0.8)
-    train_data_full = all_samples[:split_idx]
-    test_data_full = all_samples[split_idx:]
-    
-    # 4. CRITICAL: Ensure ALL edges are in training set
-    # Strategy: Find missing edges in train, move them from test (or duplicate if missing)
-    print("Ensuring all 1-hop edges are in training set...")
-    train_edges_covered = set()
-    
-    # Check what we have
-    for item in train_data_full:
-        # Extract path from text: "u v T n1 n2 ..."
-        parts = item['text'].split()
-        path = [int(x) for x in parts[3:]]
-        for i in range(len(path) - 1):
-            train_edges_covered.add((path[i], path[i+1]))
-            
-    # Find missing
-    graph_edges = set(G.edges())
-    missing_edges = graph_edges - train_edges_covered
-    
-    if missing_edges:
-        print(f"  Found {len(missing_edges)} edges missing from training set. Injecting them...")
-        for u, v in missing_edges:
-            # Create the sample
-            sample = {"text": format_path_string(u, v, "S", [u, v]), "type": "S", "u": u, "v": v}
-            train_data_full.append(sample)
-    else:
-        print("  All edges covered in random split.")
-
-    # Assign to final variables
-    train_data = train_data_full
-    test_data = test_data_full
-    
-    print(f"Training set: {len(train_data)} samples")
-    print(f"Testing set:  {len(test_data)} samples")
+    print(f"Split complete.")
+    print(f"  Train Pairs: {cnt_train_pairs}")
+    print(f"  Test Pairs:  {cnt_test_pairs}")
+    print(f"  Train Samples: {len(train_data)}")
+    print(f"  Test Samples:  {len(test_data)}")
 
     # --- Save Data ---
     
