@@ -43,7 +43,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--train_split", type=float, default=0.8, help="Probability of assigning a pair to train (unless forced)")
     parser.add_argument("--num_paths", type=int, default=10, help="Number of random simple paths per pair")
-    parser.add_argument("--num_paths", type=int, default=10, help="Number of random simple paths per pair")
+
     args = parser.parse_args()
 
     # Create a descriptive subfolder name
