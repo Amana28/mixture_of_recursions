@@ -25,14 +25,7 @@ def find_all_paths(G, source, target, cutoff=None):
     except nx.NetworkXNoPath:
         return []
 
-def find_all_shortest_paths(G, source, target):
-    """
-    Finds all shortest paths between source and target.
-    """
-    try:
-        return list(nx.all_shortest_paths(G, source, target))
-    except nx.NetworkXNoPath:
-        return []
+
 
 def format_path_string(source, target, type_char, path):
     """
@@ -50,7 +43,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--train_split", type=float, default=0.8, help="Probability of assigning a pair to train (unless forced)")
     parser.add_argument("--num_paths", type=int, default=10, help="Number of random simple paths per pair")
-    parser.add_argument("--num_shortest_paths", type=int, default=10, help="Number of shortest paths per pair")
+    parser.add_argument("--num_paths", type=int, default=10, help="Number of random simple paths per pair")
     args = parser.parse_args()
 
     # Create a descriptive subfolder name
@@ -147,19 +140,7 @@ def main():
         # P: Random Simple Paths
         # S: Shortest Paths
         
-        # S: Shortest (Exact)
-        # Note: nx.all_shortest_paths returns generator.
-        shortest_gen = nx.all_shortest_paths(G, u, v)
-        # Collect up to N
-        shortest_paths = []
-        try:
-            for _ in range(args.num_shortest_paths):
-                shortest_paths.append(next(shortest_gen))
-        except StopIteration:
-            pass
-            
-        for p in shortest_paths:
-            dataset.append({"text": format_path_string(u, v, "S", p)})
+
             
         # P: Random Simple Paths
         # Use simple paths with cutoff to avoid explosion? User didn't specify.
@@ -183,7 +164,7 @@ def main():
 
         # Update all_pairs_data for JSON export
         all_pairs_data[(u, v)]["paths"] = all_simple # Save ALL simple paths for verification/JSON
-        all_pairs_data[(u, v)]["shortest_paths"] = shortest_paths # Save the N shortest paths found
+        all_pairs_data[(u, v)]["paths"] = [] # Removing exhaustive path list
 
     print(f"Split complete.")
     print(f"  Train Pairs: {cnt_train_pairs}")
@@ -204,7 +185,8 @@ def main():
             "target": v,
             "has_path": data["has_path"],
             "paths": data["paths"],
-            "shortest_paths": data["shortest_paths"]
+            "has_path": data["has_path"],
+            "paths": data["paths"],
         }
         master_export.append(entry)
 

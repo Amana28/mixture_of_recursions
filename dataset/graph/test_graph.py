@@ -86,9 +86,7 @@ def main():
 
     # 6. Evaluation Loop
     results = []
-    correct_count = 0
     valid_path_count = 0
-    optimal_count = 0
     
     print(f"\nTesting {len(test_samples)} samples...")
     print(f"{'Sample':<50} | {'Status'}")
@@ -184,21 +182,7 @@ def main():
                         
                         if is_valid:
                             valid_path_count += 1
-                            
-                            if type_str == 'S':
-                                # Check optimality
-                                shortest_len = len(entry["shortest_paths"][0])
-                                gen_len = len(generated_path)
-                                
-                                if gen_len == shortest_len:
-                                    optimal_count += 1
-                                    sign = "" # Correct & Optimal
-                                else:
-                                    sign = "-" # Suboptimal
-                            else:
-                                # Type P
-                                correct_count += 1
-                                sign = "" # Correct
+                            sign = "" # Correct
                         else:
                             sign = "*" # Invalid path
                 else:
@@ -221,7 +205,6 @@ def main():
     print("="*30)
     print(f"Total Samples: {len(results)}")
     print(f"Valid Paths: {valid_path_count}")
-    print(f"Optimal Paths: {optimal_count}")
     
     # Save Summary
     if args.output_dir:
@@ -237,7 +220,6 @@ def main():
     with open(summary_path, "w") as f:
         f.write(f"Total Samples: {len(results)}\n")
         f.write(f"Valid Paths: {valid_path_count}\n")
-        f.write(f"Optimal Paths: {optimal_count}\n")
         f.write("\nDetailed Results:\n")
         for line in results:
             f.write(line + "\n")
