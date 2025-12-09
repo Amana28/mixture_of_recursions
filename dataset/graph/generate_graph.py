@@ -14,18 +14,52 @@ def generate_graph(num_nodes, sparsity, seed=42):
     G = nx.gnp_random_graph(num_nodes, sparsity, directed=True, seed=seed)
     return G
 
-def find_all_paths(G, source, target, cutoff=None):
+def generate_random_simple_paths(G, source, target, num_paths, max_attempts=None):
     """
-    Finds all simple paths between source and target.
+    Generates up to 'num_paths' unique random simple paths from source to target.
+    Uses randomized DFS with lookahead to ensure reachability.
     """
-    try:
-        if cutoff is None:
-            cutoff = len(G) - 1
-        return list(nx.all_simple_paths(G, source, target, cutoff=cutoff))
-    except nx.NetworkXNoPath:
+    paths = set()
+    if max_attempts is None:
+        max_attempts = num_paths * 20 # reasonable multiple
+        
+    attempts = 0
+    
+    # Pre-check reachability (though caller likely checked)
+    if not nx.has_path(G, source, target):
         return []
 
-
+    while len(paths) < num_paths and attempts < max_attempts:
+        attempts += 1
+        path = [source]
+        current = source
+        visited = {source}
+        
+        while current != target:
+            neighbors = list(G.neighbors(current))
+            # Randomize order
+            random.shuffle(neighbors)
+            
+            found_next = False
+            for n in neighbors:
+                if n not in visited:
+                    # Lookahead: Can n reach target?
+                    # For small graphs (N=30-100), nx.has_path is fast.
+                    if nx.has_path(G, n, target):
+                        current = n
+                        path.append(n)
+                        visited.add(n)
+                        found_next = True
+                        break
+            
+            if not found_next:
+                # Dead end
+                break
+        
+        if path[-1] == target:
+            paths.add(tuple(path))
+            
+    return [list(p) for p in paths]
 
 def format_path_string(source, target, type_char, path):
     """
