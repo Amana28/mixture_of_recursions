@@ -208,7 +208,8 @@ def main():
             sign = "*"
 
         # Format Output
-        prompt_text = f"{source_str} {target_str} {type_str}"
+        # Add % explicitly to show the delimiter
+        prompt_text = f"{source_str} {target_str} {type_str} %"
         gen_text = " ".join(generated_strs)
         full_text = f"{prompt_text} {gen_text}"
         
