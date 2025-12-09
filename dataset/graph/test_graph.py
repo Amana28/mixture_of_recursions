@@ -64,21 +64,16 @@ def main():
     for entry in master_data:
         master_lookup[(entry["source"], entry["target"])] = entry
 
-    # 5. Extract Samples from Val Data
-    # The val data is a continuous stream of tokens separated by EOS.
-    # We need to split it into samples.
+    # 5. Extract Samples from Test Data
+    # Test data contains prompts only (no EOS), each prompt is 3 tokens: source, target, type
     
     samples = []
-    current_sample = []
-    for token in test_data:
-        if token == eos_token_id:
-            if current_sample:
-                samples.append(current_sample)
-                current_sample = []
-        else:
-            current_sample.append(token)
+    prompt_size = 3  # Each test prompt is exactly 3 tokens
+    for i in range(0, len(test_data) - prompt_size + 1, prompt_size):
+        sample = list(test_data[i:i + prompt_size])
+        samples.append(sample)
             
-    print(f"Extracted {len(samples)} samples from validation data.")
+    print(f"Extracted {len(samples)} samples from test data.")
     
     # Select a subset to test
     if args.num_samples < len(samples):
