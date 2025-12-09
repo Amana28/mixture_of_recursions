@@ -214,6 +214,16 @@ def main():
         
         chosen_paths = generate_random_simple_paths(G, u, v, args.num_paths, reachable_lookup)
             
+        # FORCE INCLUSION OF DIRECT EDGE IF IT EXISTS
+        # This ensures 100% edge coverage in training
+        if G.has_edge(u, v):
+            direct_path = [u, v]
+            if direct_path not in chosen_paths:
+                # If we have space, replace the last one
+                if len(chosen_paths) >= args.num_paths:
+                    chosen_paths.pop()
+                chosen_paths.append(direct_path)
+
         for p in chosen_paths:
             dataset.append({"text": format_path_string(u, v, "P", p)})
 
