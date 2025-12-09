@@ -33,16 +33,23 @@ def main():
     random.seed(args.seed)
     
     # =========================================================================
-    # KEY CHANGE: Train on ALL data, COPY a subset for validation
+    # NEW LOGIC: Train on train.txt, Validate on val.txt (unseen data)
     # =========================================================================
-    train_lines = lines  # Use ALL lines for training
+    train_lines = lines # Use ALL train lines
     
-    # Sample a subset for validation (these are COPIES, not removed from training)
-    val_sample_size = int(len(lines) * args.val_ratio)
-    val_lines = random.sample(lines, val_sample_size)
-    
-    print(f"Train samples: {len(train_lines)} (100% of data)")
-    print(f"Val samples: {len(val_lines)} (copied {args.val_ratio*100:.0f}% for loss tracking)")
+    # Load validation data
+    val_file_path = os.path.join(data_dir, 'val.txt')
+    if os.path.exists(val_file_path):
+        print(f"Loading validation data from: {val_file_path}")
+        with open(val_file_path, 'r') as f:
+            val_lines = f.readlines()
+    else:
+        print("WARNING: val.txt not found! Using 10% of train as fallback.")
+        val_sample_size = int(len(lines) * 0.1)
+        val_lines = random.sample(lines, val_sample_size)
+
+    print(f"Train samples: {len(train_lines)}")
+    print(f"Val samples: {len(val_lines)}")
     # =========================================================================
 
     # Combine for vocab building

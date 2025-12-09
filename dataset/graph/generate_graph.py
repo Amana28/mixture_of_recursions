@@ -198,7 +198,14 @@ def main():
         for item in train_data:
             f.write(item['text'] + "\n")
 
-    # 3. Save Test Data (TXT) - Prompts Only
+    # 3. Save Validation Data (TXT) - Full Paths (Same samples as Test, but with answers)
+    val_file = os.path.join(args.output_dir, "val.txt")
+    print(f"Saving validation data to {val_file}...")
+    with open(val_file, 'w') as f:
+        for item in test_data:
+            f.write(item['text'] + "\n")
+
+    # 4. Save Test Data (TXT) - Prompts Only
     test_file = os.path.join(args.output_dir, "test.txt")
     print(f"Saving test data to {test_file}...")
     with open(test_file, 'w') as f:
