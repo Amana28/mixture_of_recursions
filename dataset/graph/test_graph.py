@@ -12,6 +12,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True, help="Path to trained model checkpoint")
     parser.add_argument("--data_dir", type=str, required=True, help="Path to directory containing val.bin, meta.pkl, graph_data.json")
+    parser.add_argument("--output_dir", type=str, default=None, help="Directory to save test summary (defaults to model_path)")
     parser.add_argument("--num_samples", type=int, default=50, help="Number of samples to test")
     parser.add_argument("--max_new_tokens", type=int, default=20)
     args = parser.parse_args()
@@ -213,7 +214,16 @@ def main():
     print(f"Optimal Paths: {optimal_count}")
     
     # Save Summary
-    summary_path = os.path.join(args.data_dir, "test_summary.txt")
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        # Default to model directory
+        output_dir = args.model_path
+        
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    summary_path = os.path.join(output_dir, "test_summary.txt")
     with open(summary_path, "w") as f:
         f.write(f"Total Samples: {len(results)}\n")
         f.write(f"Valid Paths: {valid_path_count}\n")
