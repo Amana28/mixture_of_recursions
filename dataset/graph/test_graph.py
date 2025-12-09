@@ -1,189 +1,234 @@
-import torch
-from transformers import AutoTokenizer, LlamaForCausalLM
-import json
 import os
+import pickle
+import numpy as np
+import torch
+import json
+import networkx as nx
+from transformers import LlamaForCausalLM, LlamaConfig
 import argparse
 from tqdm import tqdm
 
-import networkx as nx
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", type=str, default="checkpoints/vanilla_8layer_graph")
-    parser.add_argument("--data_dir", type=str, help="Path to the directory containing test.json")
-    parser.add_argument("--test_file", type=str, default=None, help="Explicit path to test file (overrides data_dir)")
-    parser.add_argument("--num_samples", type=int, default=10) # Number of samples to inspect
+    parser.add_argument("--model_path", type=str, required=True, help="Path to trained model checkpoint")
+    parser.add_argument("--data_dir", type=str, required=True, help="Path to directory containing val.bin, meta.pkl, graph_data.json")
+    parser.add_argument("--num_samples", type=int, default=50, help="Number of samples to test")
+    parser.add_argument("--max_new_tokens", type=int, default=20)
     args = parser.parse_args()
 
-    if args.test_file:
-        test_file = args.test_file
-        # Assume graph_edges.json is in the same directory as test_file
-        data_dir = os.path.dirname(test_file)
-    else:
-        # Try to find latest if data_dir not provided
-        if args.data_dir is None:
-            base_dir = "dataset/graph"
-            if os.path.exists(base_dir):
-                subdirs = [os.path.join(base_dir, d) for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d)) and d.startswith("graph_")]
-                if subdirs:
-                    latest_subdir = max(subdirs, key=os.path.getmtime)
-                    print(f"No data_dir provided. Using latest generated dataset: {latest_subdir}")
-                    data_dir = latest_subdir
-                else:
-                    data_dir = base_dir
-            else:
-                data_dir = base_dir
-        else:
-            data_dir = args.data_dir
-            
-        test_file = os.path.join(data_dir, "test.json")
+    # 1. Load Metadata (Vocab)
+    meta_path = os.path.join(args.data_dir, "meta.pkl")
+    with open(meta_path, "rb") as f:
+        meta = pickle.load(f)
+    
+    stoi = meta["stoi"]
+    itos = meta["itos"]
+    vocab_size = meta["vocab_size"]
+    eos_token_id = meta.get("eos_token_id", 0)
+    
+    print(f"Loaded metadata. Vocab size: {vocab_size}")
 
-    # Load Graph Structure for Verification
-    edges_file = os.path.join(data_dir, "graph_edges.json")
-    if os.path.exists(edges_file):
-        print(f"Loading graph structure from {edges_file}...")
-        with open(edges_file, 'r') as f:
-            edges = json.load(f)
-        G = nx.DiGraph()
-        G.add_edges_from(edges)
-    else:
-        print(f"Warning: {edges_file} not found. Cannot verify path validity.")
-        G = None
-
+    # 2. Load Model
     print(f"Loading model from {args.model_path}...")
+    # We need to load config first to ensure vocab size matches if not saved in config.json correctly
+    # But usually save_pretrained handles it.
     try:
-        tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-360M")
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-            
         model = LlamaForCausalLM.from_pretrained(args.model_path)
-        
-        if torch.cuda.is_available():
-            model = model.cuda()
-            print("Model moved to GPU.")
     except Exception as e:
         print(f"Error loading model: {e}")
-        print("Make sure you have trained the model first!")
-        return
-
-    print(f"Loading test data from {test_file}...")
-    with open(test_file, 'r') as f:
-        test_data = json.load(f)
-
-    print(f"\nRunning generation on {args.num_samples} random samples...")
-    
-    # Simple evaluation loop
+        print("Trying to load with explicit config...")
+        config = LlamaConfig.from_pretrained(args.model_path)
+        model = LlamaForCausalLM.from_pretrained(args.model_path, config=config)
+        
     model.eval()
+    if torch.cuda.is_available():
+        model = model.cuda()
+        print("Model moved to GPU.")
+
+    # 3. Load Validation Data (Binary)
+    val_bin_path = os.path.join(args.data_dir, "val.bin")
+    val_data = np.fromfile(val_bin_path, dtype=np.uint16)
+    print(f"Loaded validation data: {len(val_data)} tokens")
+
+    # 4. Load Master Dataset for Verification
+    graph_data_path = os.path.join(args.data_dir, "graph_data.json")
+    with open(graph_data_path, "r") as f:
+        master_data = json.load(f)
     
-    for i in range(min(args.num_samples, len(test_data))):
-        item = test_data[i]
-        text = item["text"]
-        
-        # Split into prompt and target
-        # Format: "source target type path..."
-        # We want to prompt with "source target type" and see if it generates the path
-        parts = text.split()
-        if len(parts) < 4:
-            continue
+    # Create lookup map: (source, target) -> data
+    master_lookup = {}
+    for entry in master_data:
+        master_lookup[(entry["source"], entry["target"])] = entry
+
+    # 5. Extract Samples from Val Data
+    # The val data is a continuous stream of tokens separated by EOS.
+    # We need to split it into samples.
+    
+    samples = []
+    current_sample = []
+    for token in val_data:
+        if token == eos_token_id:
+            if current_sample:
+                samples.append(current_sample)
+                current_sample = []
+        else:
+            current_sample.append(token)
             
-        source = parts[0]
-        target = parts[1]
-        type_char = parts[2]
+    print(f"Extracted {len(samples)} samples from validation data.")
+    
+    # Select a subset to test
+    if args.num_samples < len(samples):
+        import random
+        random.seed(42)
+        test_indices = random.sample(range(len(samples)), args.num_samples)
+        test_samples = [samples[i] for i in test_indices]
+    else:
+        test_samples = samples
+
+    # 6. Evaluation Loop
+    results = []
+    correct_count = 0
+    valid_path_count = 0
+    optimal_count = 0
+    
+    print(f"\nTesting {len(test_samples)} samples...")
+    
+    for sample_tokens in tqdm(test_samples):
+        # Decode sample to understand what it is
+        # Format: Source Target Type Path...
+        # We only want to feed "Source Target Type" as prompt
         
-        prompt = f"{source} {target} {type_char}"
-        target_path = " ".join(parts[3:])
+        # Convert tokens to strings
+        sample_strs = [itos[t] for t in sample_tokens]
         
-        inputs = tokenizer(prompt, return_tensors="pt")
+        if len(sample_strs) < 3:
+            continue # Malformed sample
+            
+        source_str = sample_strs[0]
+        target_str = sample_strs[1]
+        type_str = sample_strs[2]
+        
+        # Prepare Prompt
+        prompt_tokens = sample_tokens[:3] # Source, Target, Type
+        input_ids = torch.tensor([prompt_tokens], dtype=torch.long)
         if torch.cuda.is_available():
-            inputs = {k: v.cuda() for k, v in inputs.items()}
+            input_ids = input_ids.cuda()
             
+        # Generate
         with torch.no_grad():
-            # Generate
-            outputs = model.generate(
-                **inputs, 
-                max_new_tokens=50, 
-                do_sample=False, # Greedy for deterministic path finding
-                pad_token_id=tokenizer.pad_token_id
+            output_ids = model.generate(
+                input_ids,
+                max_new_tokens=args.max_new_tokens,
+                pad_token_id=eos_token_id,
+                eos_token_id=eos_token_id,
+                do_sample=False # Greedy decoding for deterministic results
             )
             
-        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=False)
+        # Decode Output
+        generated_ids = output_ids[0].tolist()
+        # Remove prompt from generated
+        new_ids = generated_ids[len(prompt_tokens):]
         
-        # Clean up: remove prompt and stop at EOS
-        # The prompt is "source target type "
-        # We want to extract just the path part
-        
-        # First, find where the prompt ends. 
-        # Since we know the prompt string, we can just replace it or split.
-        prompt_text = f"{source} {target} {type_char}"
-        
-        # Handle EOS truncation manually if needed (though skip_special_tokens=True usually hides it, 
-        # the model might keep generating if not stopped properly).
-        # We explicitly look for the EOS token string used in generation "</s>" or the tokenizer's eos_token
-        
-        if tokenizer.eos_token and tokenizer.eos_token in generated_text:
-            generated_text = generated_text.split(tokenizer.eos_token)[0]
-        elif "</s>" in generated_text: # Fallback for Llama/SmolLM
-            generated_text = generated_text.split("</s>")[0]
+        # Stop at EOS if present (generate might include it)
+        if eos_token_id in new_ids:
+            new_ids = new_ids[:new_ids.index(eos_token_id)]
             
-        # Remove the prompt part to get just the generated path
-        if generated_text.startswith(prompt_text):
-            generated_path_str = generated_text[len(prompt_text):].strip()
-        else:
-            # Fallback if prompt is somehow modified or special tokens mess up matching
-            # Try to find the start of the path
-            generated_path_str = generated_text.replace(prompt_text, "").strip()
-
-        print("-" * 40)
-        print(f"Sample {i+1}:")
-        print(f"Prompt:   {prompt}")
-        print(f"Target:   {target_path}")
-        print(f"Generated: {generated_path_str}")
+        generated_strs = [itos[t] for t in new_ids]
+        full_generated_path_strs = [source_str] + generated_strs # Add source back for full path check
         
-        # Convert to list of ints
+        # --- Verification ---
         try:
-            generated_path = [int(x) for x in generated_path_str.split()]
-        except ValueError:
-            generated_path = [] # Failed to parse
+            source = int(source_str)
+            target = int(target_str)
             
-        # --- Graph Verification ---
-        is_valid = False
-        is_optimal = False
-        
-        if not generated_path:
-             print("Result:   INVALID (Empty/Parse Error)")
-             continue
+            # Parse generated path
+            # It should be a sequence of integers
+            generated_path = []
+            try:
+                # The model output should be just the intermediate nodes + target?
+                # Wait, the training format is: "S T Type S n1 n2 ... T"
+                # So the prompt is "S T Type". The completion starts with "S".
+                # Let's check the generated strings.
+                generated_path = [int(s) for s in full_generated_path_strs]
+            except ValueError:
+                # Generated non-integer tokens
+                status = "INVALID_FORMAT"
+                generated_path = []
 
-        # Check if path starts with source and ends with target
-        if str(generated_path[0]) != source or str(generated_path[-1]) != target:
-             print(f"Result:   INVALID (Endpoints Mismatch: {generated_path[0]}!={source} or {generated_path[-1]}!={target})")
-             continue
-             
-        # Check if it is a valid path in the graph
-        try:
-            is_valid = nx.is_path(G, generated_path)
-        except nx.NetworkXError:
-            is_valid = False
-            
-        if not is_valid:
-             print("Result:   INVALID (Edge does not exist)")
-        else:
-            # It is a valid path!
-            if type_char == 'P':
-                print("Result:   VALID PATH (Match)")
-            elif type_char == 'S':
-                # Check optimality
-                try:
-                    shortest_len = nx.shortest_path_length(G, int(source), int(target))
-                    # nx length is number of edges. generated_path length is number of nodes.
-                    # edges = nodes - 1
-                    gen_edges = len(generated_path) - 1
+            if not generated_path:
+                status = "INVALID_FORMAT"
+            else:
+                # Check against Master Data
+                if (source, target) in master_lookup:
+                    entry = master_lookup[(source, target)]
                     
-                    if gen_edges == shortest_len:
-                        print("Result:   OPTIMAL SHORTEST PATH (Match)")
+                    if not entry["has_path"]:
+                         # Should not happen in test set usually
+                        status = "NO_PATH_EXISTS"
                     else:
-                        print(f"Result:   SUB-OPTIMAL (Len {gen_edges} vs Optimal {shortest_len})")
-                except nx.NetworkXNoPath:
-                    print("Result:   ERROR (No path exists in graph?)")
+                        # 1. Is it a valid path in the graph?
+                        # We can check if it exists in entry["paths"] (if small enough)
+                        # Or reconstruct graph. But checking entry["paths"] is safer if we saved all.
+                        # However, for large graphs, "paths" might be truncated.
+                        # Let's trust the "paths" list if it's there.
+                        
+                        # Convert generated path to list of ints for comparison
+                        # entry["paths"] is list of lists of ints
+                        
+                        is_valid = generated_path in entry["paths"]
+                        
+                        if is_valid:
+                            valid_path_count += 1
+                            status = "VALID"
+                            
+                            # 2. Is it optimal? (Only for 'S' type)
+                            if type_str == 'S':
+                                # Check length against shortest paths
+                                shortest_len = len(entry["shortest_paths"][0])
+                                gen_len = len(generated_path)
+                                
+                                if gen_len == shortest_len:
+                                    optimal_count += 1
+                                    status = "OPTIMAL"
+                                else:
+                                    status = "SUB_OPTIMAL"
+                            else:
+                                # For 'P' type, valid is enough
+                                correct_count += 1 # Count as correct
+                                status = "VALID_P"
+                        else:
+                            status = "INVALID_PATH"
+                else:
+                    status = "UNKNOWN_PAIR"
+
+        except Exception as e:
+            status = f"ERROR: {e}"
+
+        results.append({
+            "prompt": f"{source_str} {target_str} {type_str}",
+            "generated": " ".join(generated_strs),
+            "status": status
+        })
+        
+    # --- Summary ---
+    print("\n" + "="*30)
+    print("TEST SUMMARY")
+    print("="*30)
+    print(f"Total Samples: {len(results)}")
+    print(f"Valid Paths: {valid_path_count}")
+    print(f"Optimal Paths (S-type): {optimal_count}")
+    
+    # Save Summary
+    summary_path = os.path.join(args.data_dir, "test_summary.txt")
+    with open(summary_path, "w") as f:
+        f.write(f"Total Samples: {len(results)}\n")
+        f.write(f"Valid Paths: {valid_path_count}\n")
+        f.write(f"Optimal Paths: {optimal_count}\n")
+        f.write("\nDetailed Results:\n")
+        for res in results:
+            f.write(f"{res['prompt']} -> {res['generated']} | {res['status']}\n")
+            
+    print(f"Summary saved to {summary_path}")
 
 if __name__ == "__main__":
     main()

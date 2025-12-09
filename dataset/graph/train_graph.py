@@ -1,205 +1,127 @@
 import os
-import json
+import pickle
+import numpy as np
 import torch
-import torch.nn as nn
 from torch.utils.data import Dataset
-from transformers import (
-    AutoConfig,
-    AutoTokenizer,
-    LlamaConfig,
-    LlamaForCausalLM,
-    TrainingArguments,
-    Trainer,
-    DataCollatorForLanguageModeling,
-)
+from transformers import LlamaConfig, LlamaForCausalLM, Trainer, TrainingArguments, DataCollatorForLanguageModeling
 import argparse
 
-# ----- Data Paths -----
-# Default paths (will be overridden by argparse if provided)
-DEFAULT_DATA_DIR = "dataset/graph" 
-OUTPUT_DIR = "checkpoints/vanilla_8layer_graph"
-
-class GraphDataset(Dataset):
-    def __init__(self, file_path, tokenizer, max_length=512, repeat=1):
-        self.data = []
-        with open(file_path, 'r') as f:
-            raw_data = json.load(f)
-            # Expecting list of {"text": "..."}
-            for item in raw_data:
-                self.data.append(item["text"])
+class GraphBinDataset(Dataset):
+    """
+    Dataset for binary graph data.
+    Loads the entire binary file into memory and serves chunks.
+    """
+    def __init__(self, bin_path, block_size):
+        self.data = np.fromfile(bin_path, dtype=np.uint16)
+        self.block_size = block_size
         
-        # Repeat the dataset if requested
-        if repeat > 1:
-            self.data = self.data * repeat
-            
-        self.tokenizer = tokenizer
-        self.max_length = max_length
+        # We can either train on random chunks or fixed windows.
+        # For simplicity and efficiency, we'll just slice it into fixed chunks.
+        # This might cut off some paths in the middle, but with enough data/epochs it learns.
+        # Alternatively, we could try to align with EOS, but that's complex for batching.
+        # Let's stick to the standard "nanoGPT" style continuous stream training.
+        
+        self.length = len(self.data) - block_size
 
     def __len__(self):
-        return len(self.data)
+        return self.length
 
     def __getitem__(self, idx):
-        text = self.data[idx]
-        # Tokenize
-        encodings = self.tokenizer(
-            text,
-            truncation=True,
-            max_length=self.max_length,
-            padding="max_length",
-            return_tensors="pt"
-        )
+        # Grab a chunk of data
+        chunk = self.data[idx : idx + self.block_size]
         
-        input_ids = encodings.input_ids.squeeze()
-        attention_mask = encodings.attention_mask.squeeze()
+        # Convert to tensor (Long/Int64 for PyTorch embedding)
+        input_ids = torch.from_numpy(chunk.astype(np.int64))
         
+        # For Causal LM, labels are usually the same as input_ids (shifted inside the model)
+        # HuggingFace Trainer handles shifting if we provide 'labels'
         return {
             "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": input_ids.clone() 
+            "labels": input_ids.clone()
         }
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, help="Path to the directory containing train.json and test.json")
-    
-    # Training Hyperparameters
-    parser.add_argument("--per_device_train_batch_size", type=int, default=8, help="Batch size per device")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Gradient accumulation steps")
-    parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate")
-    parser.add_argument("--num_train_epochs", type=int, default=100, help="Number of training epochs")
-    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
-    parser.add_argument("--adam_beta1", type=float, default=0.9, help="Adam beta1")
-    parser.add_argument("--adam_beta2", type=float, default=0.99, help="Adam beta2")
-    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm")
-    parser.add_argument("--warmup_steps", type=int, default=50, help="Warmup steps")
-    parser.add_argument("--logging_steps", type=int, default=20, help="Logging steps")
-    parser.add_argument("--save_steps", type=int, default=500, help="Save steps")
-    parser.add_argument("--eval_steps", type=int, default=100, help="Evaluation steps")
-    parser.add_argument("--repeat_train", type=int, default=1, help="Number of times to repeat the training dataset")
-    
-    args, unknown = parser.parse_known_args()
-    
-    # If data_dir is not provided, try to find the most recent graph folder
-    if args.data_dir is None:
-        base_dir = "dataset/graph"
-        if os.path.exists(base_dir):
-            subdirs = [os.path.join(base_dir, d) for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d)) and d.startswith("graph_")]
-            if subdirs:
-                # Sort by creation time (or name) to get the latest
-                latest_subdir = max(subdirs, key=os.path.getmtime)
-                print(f"No data_dir provided. Using latest generated dataset: {latest_subdir}")
-                data_dir = latest_subdir
-            else:
-                data_dir = base_dir
-        else:
-            data_dir = base_dir
-    else:
-        data_dir = args.data_dir
+    parser.add_argument("--data_dir", type=str, required=True, help="Path to directory containing train.bin and meta.pkl")
+    parser.add_argument("--output_dir", type=str, default="checkpoints/graph_bin_model")
+    parser.add_argument("--num_train_epochs", type=int, default=3)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=32)
+    parser.add_argument("--learning_rate", type=float, default=1e-3)
+    parser.add_argument("--block_size", type=int, default=64, help="Context length for training")
+    parser.add_argument("--save_steps", type=int, default=500)
+    args = parser.parse_args()
 
-    train_path = os.path.join(data_dir, "train.json")
-    test_path = os.path.join(data_dir, "test.json")
+    # Load Metadata
+    meta_path = os.path.join(args.data_dir, "meta.pkl")
+    if not os.path.exists(meta_path):
+        raise FileNotFoundError(f"meta.pkl not found in {args.data_dir}")
+        
+    with open(meta_path, "rb") as f:
+        meta = pickle.load(f)
+        
+    vocab_size = meta["vocab_size"]
+    print(f"Loaded metadata. Vocab size: {vocab_size}")
     
-    print(f"PyTorch: {torch.__version__}")
-    if torch.cuda.is_available():
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-    
-    # ----- Model Architecture -----
-    MODEL_CONFIG = {
-        "num_hidden_layers": 8,
-        "hidden_size": 128,
-        "intermediate_size": 352,
-        "num_attention_heads": 4,
-        "num_key_value_heads": 2,
-    }
+    # Load Dataset
+    train_bin_path = os.path.join(args.data_dir, "train.bin")
+    if not os.path.exists(train_bin_path):
+        raise FileNotFoundError(f"train.bin not found in {args.data_dir}")
+        
+    print(f"Loading training data from {train_bin_path}...")
+    dataset = GraphBinDataset(train_bin_path, args.block_size)
+    print(f"Dataset size (tokens): {len(dataset.data)}")
+    print(f"Number of samples (windows): {len(dataset)}")
 
-    print("\n" + "="*60)
-    print("LOADING TOKENIZER")
-    print("="*60)
-
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-360M")
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    # Our data generation script adds the EOS token string explicitly ("</s>"), 
-    # so we don't strictly need the tokenizer to add it automatically if it tokenizes the string correctly.
-    # However, to be safe, let's ensure we don't double add it.
-    # If the string ends with </s>, the tokenizer should handle it if it knows the special token.
-    # Let's verify the tokenizer knows </s> is eos.
-    print(f"EOS Token: {tokenizer.eos_token}")
-
-    print("\n" + "="*60)
-    print("CREATING MODEL")
-    print("="*60)
-
+    # Model Configuration
+    # We use a small Llama config
     config = LlamaConfig(
-        vocab_size=len(tokenizer),
-        hidden_size=MODEL_CONFIG["hidden_size"],
-        intermediate_size=MODEL_CONFIG["intermediate_size"],
-        num_hidden_layers=MODEL_CONFIG["num_hidden_layers"],
-        num_attention_heads=MODEL_CONFIG["num_attention_heads"],
-        num_key_value_heads=MODEL_CONFIG["num_key_value_heads"],
-        hidden_act="silu",
-        max_position_embeddings=512,
-        initializer_range=0.02,
-        rms_norm_eps=1e-5,
-        use_cache=True,
-        pad_token_id=tokenizer.pad_token_id,
-        bos_token_id=tokenizer.bos_token_id,
-        eos_token_id=tokenizer.eos_token_id,
-        tie_word_embeddings=False,
-        rope_theta=2500.0,
+        vocab_size=vocab_size,  # Exact vocab size from our data
+        hidden_size=256,        # Small embedding size
+        intermediate_size=512,
+        num_hidden_layers=8,
+        num_attention_heads=8,
+        max_position_embeddings=args.block_size, # Context length
+        pad_token_id=0,         # Assuming 0 is EOS/PAD (check meta if needed, but usually 0 is safe for new vocab)
+        bos_token_id=None,
+        eos_token_id=meta.get('eos_token_id', 0)
     )
-
+    
+    print("Initializing model...")
     model = LlamaForCausalLM(config)
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Total Parameters: {total_params:,} ({total_params/1e6:.2f}M)")
+    print(f"Model parameters: {model.num_parameters():,}")
 
-    print("\n" + "="*60)
-    print("LOADING DATA")
-    print("="*60)
-    
-    # Pass repeat argument to train dataset
-    train_dataset = GraphDataset(train_path, tokenizer, max_length=512, repeat=args.repeat_train)
-    test_dataset = GraphDataset(test_path, tokenizer, max_length=512, repeat=1)
-    
-    print(f"Train size: {len(train_dataset)} (Repeated {args.repeat_train} times)")
-    print(f"Test size: {len(test_dataset)}")
-
+    # Training Arguments
     training_args = TrainingArguments(
-        output_dir=OUTPUT_DIR,
-        per_device_train_batch_size=args.per_device_train_batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        learning_rate=args.learning_rate,
+        output_dir=args.output_dir,
+        overwrite_output_dir=True,
         num_train_epochs=args.num_train_epochs,
-        warmup_steps=args.warmup_steps,
-        weight_decay=args.weight_decay,
-        adam_beta1=args.adam_beta1,
-        adam_beta2=args.adam_beta2,
-        max_grad_norm=args.max_grad_norm,
-        logging_steps=args.logging_steps,
+        per_device_train_batch_size=args.per_device_train_batch_size,
+        learning_rate=args.learning_rate,
         save_steps=args.save_steps,
-        eval_steps=args.eval_steps,
-        eval_strategy="steps",
-        save_strategy="steps",
-        fp16=torch.cuda.is_available(),
-        report_to="none" # Disable wandb for this simple script unless requested
+        logging_steps=10,
+        save_total_limit=2,
+        remove_unused_columns=False, # Important for custom dataset
+        report_to="none"
     )
 
+    # Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=test_dataset,
-        data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
+        train_dataset=dataset,
+        data_collator=None # Default collator works for dicts of tensors
     )
 
-    print("\n" + "="*60)
-    print("STARTING TRAINING")
-    print("="*60)
-    
+    print("Starting training...")
     trainer.train()
     
-    print("Training complete. Saving model...")
-    trainer.save_model(OUTPUT_DIR)
+    print("Saving final model...")
+    trainer.save_model(args.output_dir)
+    
+    # Also save the config so we can load it later
+    config.save_pretrained(args.output_dir)
+    
+    print("Training complete!")
 
 if __name__ == "__main__":
     main()
