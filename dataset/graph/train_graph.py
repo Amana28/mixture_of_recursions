@@ -31,6 +31,13 @@ parser.add_argument('--block_size', type=int, default=64, help='Context length')
 parser.add_argument('--save_steps', type=int, default=1000, help='Save checkpoint every N steps')
 parser.add_argument('--eval_steps', type=int, default=1000, help='Evaluate every N steps')
 parser.add_argument('--log_interval', type=int, default=100, help='Log every N steps')
+# Model size arguments
+parser.add_argument('--hidden_size', type=int, default=256, help='Model hidden size')
+parser.add_argument('--num_layers', type=int, default=8, help='Number of transformer layers')
+parser.add_argument('--num_heads', type=int, default=8, help='Number of attention heads')
+# Regularization arguments
+parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate')
+parser.add_argument('--weight_decay', type=float, default=0.1, help='Weight decay')
 args = parser.parse_args()
 
 # Configuration
@@ -52,7 +59,7 @@ compile = False # Set to True if you have PyTorch 2.0 and want speedup
 warmup_iters = 100 # Small warmup
 min_lr = learning_rate / 10
 decay_lr = True
-weight_decay = 1e-1
+weight_decay = args.weight_decay
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
@@ -115,14 +122,16 @@ def get_batch(split):
 print("Initializing model...")
 config = LlamaConfig(
     vocab_size=vocab_size,
-    hidden_size=256,
-    intermediate_size=512,
-    num_hidden_layers=8,
-    num_attention_heads=8,
+    hidden_size=args.hidden_size,
+    intermediate_size=args.hidden_size * 2,
+    num_hidden_layers=args.num_layers,
+    num_attention_heads=args.num_heads,
     max_position_embeddings=block_size,
     pad_token_id=0,
     bos_token_id=None,
-    eos_token_id=meta.get('eos_token_id', 0)
+    eos_token_id=meta.get('eos_token_id', 0),
+    attention_dropout=args.dropout,
+    hidden_dropout_prob=args.dropout if hasattr(LlamaConfig(), 'hidden_dropout_prob') else None
 )
 model = LlamaForCausalLM(config)
 model.to(device)
