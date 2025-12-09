@@ -86,6 +86,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--train_split", type=float, default=0.8, help="Probability of assigning a pair to train (unless forced)")
     parser.add_argument("--num_paths", type=int, default=10, help="Number of random simple paths per pair")
+    parser.add_argument("--path_repeat", type=int, default=1, help="Number of times to repeat each path in training data")
 
     args = parser.parse_args()
 
@@ -262,7 +263,8 @@ def main():
     print(f"Saving training data to {train_file}...")
     with open(train_file, 'w') as f:
         for item in train_data:
-            f.write(item['text'] + "\n")
+            for _ in range(args.path_repeat):
+                f.write(item['text'] + "\n")
 
     # 3. Save Test Data (TXT) - Full Paths (for Validation Loss & Testing split)
     test_file = os.path.join(args.output_dir, "test.txt")
