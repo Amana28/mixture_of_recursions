@@ -39,6 +39,7 @@ def get_logger(filename, verbosity=0, name=None):
     
     logger = logging.getLogger(name)
     logger.setLevel(level_dict[verbosity])
+    logger.propagate = False  # Don't propagate to root logger (prevents console output)
     
     # Clear any existing handlers
     logger.handlers = []
