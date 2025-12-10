@@ -3,7 +3,7 @@ Training script for Vanilla LLaMA model using custom bin file data.
 
 Example usage:
     python train_scripts/train_vanilla.py \
-        --dataset simple_graph/st \
+        --dataset dag/st \
         --n_layer 2 \
         --n_head 2 \
         --n_embd 240 \
@@ -33,24 +33,21 @@ from transformers import LlamaConfig, LlamaForCausalLM
 # Logging setup
 
 def get_logger(filename, verbosity=0, name=None):
-    """Create a logger that writes to both console and file."""
+    """Create a logger that writes to file only (no console output)."""
     level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
     formatter = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s")
     
     logger = logging.getLogger(name)
     logger.setLevel(level_dict[verbosity])
     
-    # File handler
+    # Clear any existing handlers
+    logger.handlers = []
+    
+    # File handler only (no console handler)
     fh = logging.FileHandler(filename, "w")
     fh.setLevel(level_dict[verbosity])
     fh.setFormatter(formatter)
     logger.addHandler(fh)
-    
-    # Console handler
-    ch = logging.StreamHandler()
-    ch.setLevel(level_dict[verbosity])
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
     
     return logger
 
