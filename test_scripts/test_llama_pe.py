@@ -1,14 +1,13 @@
 """
-Testing script for Vanilla LLaMA model on graph data.
-Uses custom generate function matching the original GPT implementation.
+Testing script for LLaMA with Learned Position Embeddings.
 
 Example usage:
-    python test_scripts/test_vanilla.py \
+    python test_scripts/test_llama_pe.py \
         --dataset dag/st \
-        --ckpt_iter 6000 \
-        --n_layer 1 \
-        --n_head 1 \
-        --n_embd 120 \
+        --ckpt_iter 9000 \
+        --n_layer 2 \
+        --n_head 2 \
+        --n_embd 240 \
         --num_nodes 100 \
         --num_of_paths 20 \
         --device cuda:0
@@ -26,25 +25,28 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-# Use standard transformers LlamaForCausalLM
-from transformers import LlamaConfig, LlamaForCausalLM
+# Add parent directory to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from transformers import LlamaConfig
+from model.llama_learned_pe import LlamaWithLearnedPE, create_llama_with_learned_pe
 
 # -----------------------------------------------------------------------------
 # Parse arguments
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Testing LLaMA model on graph data.')
+    parser = argparse.ArgumentParser(description='Testing LLaMA with Learned PE.')
     parser.add_argument('--dataset', type=str, default='dag/st', help='Dataset path')
-    parser.add_argument('--ckpt_iter', type=int, default=10000, help='Checkpoint iteration to load')
-    parser.add_argument('--n_layer', type=int, default=1, help='Number of layers (must match training)')
-    parser.add_argument('--n_head', type=int, default=1, help='Number of attention heads (must match training)')
-    parser.add_argument('--n_embd', type=int, default=120, help='Embedding size (must match training)')
+    parser.add_argument('--ckpt_iter', type=int, default=10000, help='Checkpoint iteration')
+    parser.add_argument('--n_layer', type=int, default=2, help='Number of layers')
+    parser.add_argument('--n_head', type=int, default=2, help='Number of attention heads')
+    parser.add_argument('--n_embd', type=int, default=240, help='Embedding size')
     parser.add_argument('--temperature', type=float, default=1.0, help='Sampling temperature')
-    parser.add_argument('--device', type=str, default='cuda:0', help='Device to use')
+    parser.add_argument('--device', type=str, default='cuda:0', help='Device')
     parser.add_argument('--num_nodes', type=int, default=100, help='Number of nodes')
     parser.add_argument('--num_of_paths', type=int, default=20, help='Number of paths')
-    parser.add_argument('--batch_size', type=int, default=1000, help='Batch size for evaluation')
-    parser.add_argument('--num_batches', type=int, default=10, help='Number of batches to evaluate')
+    parser.add_argument('--batch_size', type=int, default=1000, help='Batch size')
+    parser.add_argument('--num_batches', type=int, default=10, help='Number of batches')
     return parser.parse_args()
 
 
@@ -52,7 +54,7 @@ def parse_args():
 # Utility functions
 
 def find_third_number_position(number_string):
-    """Find position after third number in string (for simple format)."""
+    """Find position after third number in string."""
     numbers = number_string.split()
     third_number_index = 2
     position = sum(len(num) for num in numbers[:third_number_index]) + third_number_index - 1
@@ -80,49 +82,6 @@ def check_path(G, gen_str):
 
 
 # -----------------------------------------------------------------------------
-# Custom generate function matching GPT implementation
-
-@torch.no_grad()
-def generate(model, idx, max_new_tokens, temperature=1.0, top_k=None):
-    """
-    Generate tokens autoregressively, matching GPT's generate method.
-    
-    Args:
-        model: LlamaForCausalLM model
-        idx: Input token indices (B, T)
-        max_new_tokens: Number of new tokens to generate
-        temperature: Sampling temperature
-        top_k: Top-k sampling (None for full softmax)
-    
-    Returns:
-        Generated token indices (B, T + generated_tokens)
-    """
-    for _ in range(max_new_tokens):
-        # Get model output
-        outputs = model(input_ids=idx)
-        logits = outputs.logits
-        
-        # Get logits for the last position and scale by temperature
-        logits = logits[:, -1, :] / temperature
-        
-        # Optional top-k filtering
-        if top_k is not None:
-            v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-            logits[logits < v[:, [-1]]] = -float('Inf')
-        
-        # Apply softmax to get probabilities
-        probs = F.softmax(logits, dim=-1)
-        
-        # Sample from the distribution
-        idx_next = torch.multinomial(probs, num_samples=1)
-        
-        # Append to sequence
-        idx = torch.cat((idx, idx_next), dim=1)
-    
-    return idx
-
-
-# -----------------------------------------------------------------------------
 # Main
 
 def main():
@@ -134,10 +93,10 @@ def main():
     num_nodes = args.num_nodes
     num_of_paths = args.num_of_paths
     
-    # Paths
+    # Paths (with _pe suffix)
     data_path = f'data/{dataset}/{num_nodes}'
     meta_path = f'{data_path}/meta.pkl'
-    out_dir = f'out/{dataset}_llama_{args.n_layer}L_{args.n_head}H_{args.n_embd}E_{num_nodes}N'
+    out_dir = f'out/{dataset}_llama_pe_{args.n_layer}L_{args.n_head}H_{args.n_embd}E_{num_nodes}N'
     
     # Load metadata
     print(f"Loading meta from {meta_path}...")
@@ -155,16 +114,12 @@ def main():
     print(f"Vocabulary size: {vocab_size}")
     print(f"Block size: {block_size}")
     
-    # Encoding/decoding functions (same as test_simple.py)
+    # Encoding/decoding
     def encode(s):
-        ss = s.split(" ")
-        return [stoi[ch] for ch in ss]
+        return [stoi[ch] for ch in s.split(" ")]
     
     def decode(l):
-        dec = ""
-        for i in l:
-            dec = dec + itos[i] + " "
-        return dec[:-1]
+        return " ".join([itos[i] for i in l])
     
     # Load checkpoint
     if num_of_paths == 0:
@@ -175,9 +130,9 @@ def main():
     print(f"Loading checkpoint from {ckpt_path}...")
     checkpoint = torch.load(ckpt_path, map_location=device)
     
-    # Recreate config from checkpoint
+    # Create model
     saved_config = checkpoint.get('config', {})
-    config = LlamaConfig(
+    model = create_llama_with_learned_pe(
         vocab_size=saved_config.get('vocab_size', vocab_size),
         hidden_size=saved_config.get('hidden_size', args.n_embd),
         intermediate_size=saved_config.get('intermediate_size', args.n_embd * 4),
@@ -185,23 +140,9 @@ def main():
         num_attention_heads=saved_config.get('num_attention_heads', args.n_head),
         num_key_value_heads=saved_config.get('num_key_value_heads', args.n_head),
         max_position_embeddings=saved_config.get('max_position_embeddings', block_size),
-        rms_norm_eps=1e-6,
-        pad_token_id=0,
-        tie_word_embeddings=True,
-        use_cache=False,  # Disable for simpler generation
     )
     
-    # Load model
-    model = LlamaForCausalLM(config)
-    
-    # Handle state dict prefix if compiled
-    state_dict = checkpoint['model']
-    unwanted_prefix = '_orig_mod.'
-    for k, v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    
-    model.load_state_dict(state_dict)
+    model.load_state_dict(checkpoint['model'])
     model.eval()
     model.to(device)
     
@@ -214,10 +155,10 @@ def main():
         path_graph = nx.read_graphml(graph_path)
         print(f"Loaded graph from {graph_path}")
     else:
-        print(f"Warning: Graph file not found at {graph_path}")
+        print(f"Warning: Graph not found at {graph_path}")
         path_graph = None
     
-    # Load test data - exactly like test_simple.py
+    # Load test data
     test_file = f'{data_path}/test.txt'
     print(f"Loading test data from {test_file}...")
     
@@ -235,7 +176,6 @@ def main():
                 if line[:pos] != '':
                     texts.append(line[:pos])
                     encode_texts.append(encode(line[:pos]))
-            
             ground_truth.append(line)
     
     print(f"Loaded {len(texts)} test examples")
@@ -255,27 +195,26 @@ def main():
     print(f"\nRunning evaluation...")
     print(f"Results will be saved to {pred_file}")
     
-    # Clear output file
     with open(pred_file, 'w') as f:
         pass
     
     total_samples = 0
     total_correct = 0
     
-    # Sample random indices for evaluation
     ix = torch.randint(len(encode_texts), (batch_size,))
     
     for i in tqdm(range(num_batches)):
         x = encode_texts[ix]
         x_gt = ground_truth[ix.cpu().numpy()]
         
-        # Generate using custom generate (matching GPT's generate)
-        y = generate(model, x, max_new_tokens, temperature=temperature, top_k=top_k)
+        # Generate using model's generate method
+        with torch.no_grad():
+            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
         
-        # Decode predictions - take only up to newline
+        # Decode predictions
         y_pred = [decode(y[t].tolist()).split('\n')[0] for t in range(batch_size)]
         
-        # Debug: print first prediction in first batch
+        # Debug first batch
         if i == 0:
             print(f"\nDebug - First prediction raw tokens: {y[0].tolist()}")
             print(f"Debug - First prediction decoded: {y_pred[0]}")
@@ -295,7 +234,7 @@ def main():
                 
                 f.write(f"{item} {symbol}\n")
     
-    # Print summary
+    # Summary
     accuracy = total_correct / total_samples * 100 if total_samples > 0 else 0
     print(f"\n{'='*50}")
     print(f"Evaluation Results:")
