@@ -175,6 +175,10 @@ def get_batch(split):
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
     
+    # CRITICAL: Replace PAD tokens (0) with -100 in labels
+    # HuggingFace uses ignore_index=-100, original GPT uses ignore_index=0
+    y = torch.where(y == 0, torch.tensor(-100), y)
+    
     if device_type == 'cuda':
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
     else:
