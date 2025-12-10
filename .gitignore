@@ -203,3 +203,6 @@ hf_models/
 *.html
 *.csv
 dataset/graph/**/*.json
+# macOS
+.DS_Store
+**/.DS_Store
