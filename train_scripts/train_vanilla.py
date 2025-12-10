@@ -318,12 +318,13 @@ while iter_num <= max_iters:
     if iter_num % eval_interval == 0:
         losses = estimate_loss()
         eval_msg = f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.2e}"
+        print(eval_msg)
         logger.info(eval_msg)
-        open_and_append(log_file_name, eval_msg)
         
         if losses['val'] < best_val_loss:
             best_val_loss = losses['val']
             save_checkpoint(iter_num, best_val_loss)
+            print(f"Saved best checkpoint at iter {iter_num}")
             logger.info(f"Saved best checkpoint at iter {iter_num}")
 
     # Forward pass
@@ -355,8 +356,8 @@ while iter_num <= max_iters:
     if iter_num % log_interval == 0:
         lossf = loss.item() * gradient_accumulation_steps
         iter_msg = f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, lr {lr:.2e}"
+        print(iter_msg)
         logger.info(iter_msg)
-        open_and_append(log_file_name, iter_msg)
 
     iter_num += 1
 
