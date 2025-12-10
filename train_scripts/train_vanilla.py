@@ -2,7 +2,7 @@
 Training script for Vanilla LLaMA model using custom bin file data.
 
 Example usage:
-    python train-scripts/train_vanilla.py \
+    python train_scripts/train_vanilla.py \
         --dataset simple_graph/st \
         --n_layer 2 \
         --n_head 2 \
@@ -17,6 +17,7 @@ import sys
 import time
 import math
 import pickle
+import logging
 from contextlib import nullcontext
 import argparse
 
@@ -25,11 +26,39 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-# Add the parent directory to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Use standard transformers LlamaForCausalLM (compatible with all transformers versions)
+from transformers import LlamaConfig, LlamaForCausalLM
 
-from transformers import LlamaConfig
-from model.base_model.modeling_llama import LlamaForCausalLM
+# -----------------------------------------------------------------------------
+# Logging setup
+
+def get_logger(filename, verbosity=0, name=None):
+    """Create a logger that writes to both console and file."""
+    level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
+    formatter = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s")
+    
+    logger = logging.getLogger(name)
+    logger.setLevel(level_dict[verbosity])
+    
+    # File handler
+    fh = logging.FileHandler(filename, "w")
+    fh.setLevel(level_dict[verbosity])
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+    
+    # Console handler
+    ch = logging.StreamHandler()
+    ch.setLevel(level_dict[verbosity])
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+    
+    return logger
+
+
+def open_and_append(filename, text):
+    """Append text to a file."""
+    with open(filename, 'a') as file:
+        file.write(text + '\n')
 
 # -----------------------------------------------------------------------------
 # Parse arguments
@@ -82,6 +111,13 @@ print(f"Block size: {block_size}")
 # Output directory
 out_dir = f'out/{dataset}_llama_{n_layer}L_{n_head}H_{n_embd}E_{num_nodes}N'
 os.makedirs(out_dir, exist_ok=True)
+
+# Initialize logger
+if num_of_paths == 0:
+    log_file_name = os.path.join(out_dir, 'train.log')
+else:
+    log_file_name = os.path.join(out_dir, f'train_{num_of_paths}.log')
+logger = get_logger(log_file_name, verbosity=1, name='train_vanilla')
 
 # -----------------------------------------------------------------------------
 # Training hyperparameters
@@ -284,11 +320,14 @@ while iter_num <= max_iters:
     # Evaluate and save checkpoint
     if iter_num % eval_interval == 0:
         losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.2e}")
+        eval_msg = f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.2e}"
+        logger.info(eval_msg)
+        open_and_append(log_file_name, eval_msg)
         
         if losses['val'] < best_val_loss:
             best_val_loss = losses['val']
             save_checkpoint(iter_num, best_val_loss)
+            logger.info(f"Saved best checkpoint at iter {iter_num}")
 
     # Forward pass
     with ctx:
@@ -318,11 +357,15 @@ while iter_num <= max_iters:
     
     if iter_num % log_interval == 0:
         lossf = loss.item() * gradient_accumulation_steps
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, lr {lr:.2e}")
+        iter_msg = f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, lr {lr:.2e}"
+        logger.info(iter_msg)
+        open_and_append(log_file_name, iter_msg)
 
     iter_num += 1
 
 # Final save
 save_checkpoint(iter_num - 1, best_val_loss)
+logger.info(f"Training complete! Best val loss: {best_val_loss:.4f}")
+logger.info(f"Checkpoints saved to: {out_dir}")
 print(f"\nTraining complete! Best val loss: {best_val_loss:.4f}")
 print(f"Checkpoints saved to: {out_dir}")
