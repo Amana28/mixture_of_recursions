@@ -78,6 +78,8 @@ parser.add_argument('--mor_type', type=str, default='expert', choices=['expert',
 parser.add_argument('--num_recursion', type=int, default=2, help='Number of recursions')
 parser.add_argument('--capacity', type=str, default='0.5,0.5', 
                     help='Capacity factors for expert-choice (comma-separated)')
+parser.add_argument('--sharing', type=str, default='middle_cycle', choices=['middle_cycle', 'cycle'],
+                    help='Sharing strategy: middle_cycle (first+last layers no routing) or cycle (all routing)')
 parser.add_argument('--n_layer', type=int, default=6, help='Number of layers (should be divisible)')
 parser.add_argument('--n_head', type=int, default=2, help='Number of attention heads')
 parser.add_argument('--n_embd', type=int, default=240, help='Embedding size')
@@ -99,6 +101,7 @@ dataset = args.dataset
 mor_type = args.mor_type
 num_recursion = args.num_recursion
 capacity_factors = [float(c) for c in args.capacity.split(',')]
+sharing_strategy = args.sharing
 n_layer = args.n_layer
 n_head = args.n_head
 n_embd = args.n_embd
@@ -109,12 +112,25 @@ train_batch_size = args.train_batch_size
 val_batch_size = args.val_batch_size
 learning_rate = args.learning_rate
 
-# Validate layer count
-# For middle_cycle: n_layer = 2 + (base_depth * num_recursion)
-base_depth = (n_layer - 2) // num_recursion
-if (n_layer - 2) % num_recursion != 0:
-    print(f"Warning: n_layer-2 ({n_layer-2}) is not divisible by num_recursion ({num_recursion})")
-    print(f"Effective layers per recursion: {base_depth}")
+# Validate layer count based on sharing strategy
+if sharing_strategy == "middle_cycle":
+    # middle_cycle: n_layer = 2 + (base_depth * num_recursion)
+    base_depth = (n_layer - 2) // num_recursion
+    if (n_layer - 2) % num_recursion != 0:
+        print(f"Warning: n_layer-2 ({n_layer-2}) is not divisible by num_recursion ({num_recursion})")
+        print(f"Effective layers per recursion: {base_depth}")
+else:  # cycle
+    # cycle: n_layer = base_depth * num_recursion
+    base_depth = n_layer // num_recursion
+    if n_layer % num_recursion != 0:
+        print(f"Warning: n_layer ({n_layer}) is not divisible by num_recursion ({num_recursion})")
+        print(f"Effective layers per recursion: {base_depth}")
+
+# Validate capacity factors for expert-choice
+if mor_type == "expert" and len(capacity_factors) != num_recursion:
+    print(f"⚠️  WARNING: capacity has {len(capacity_factors)} values but num_recursion is {num_recursion}")
+    print(f"⚠️  Missing recursions will use default capacity=0.5")
+    print(f"⚠️  Recommended: --capacity {','.join(['0.25'] * num_recursion)} for {num_recursion} recursions")
 
 # Data directory
 data_dir = os.path.join('data', f'{dataset}/{num_nodes}')
@@ -212,7 +228,7 @@ def get_batch(split):
 # -----------------------------------------------------------------------------
 # Model initialization
 
-print(f"Initializing MoR-APE model ({mor_type}-choice, {num_recursion} recursions)...")
+print(f"Initializing MoR-APE model ({mor_type}-choice, {num_recursion} recursions, {sharing_strategy})...")
 
 model = create_mor_ape(
     vocab_size=vocab_size,
@@ -224,6 +240,7 @@ model = create_mor_ape(
     mor_type=mor_type,
     num_recursion=num_recursion,
     capacity_factors=capacity_factors,
+    sharing_strategy=sharing_strategy,
     attention_dropout=dropout,
     hidden_dropout=dropout,
 )
@@ -307,6 +324,7 @@ def save_checkpoint(iter_num, best_val_loss):
             'mor_type': mor_type,
             'num_recursion': num_recursion,
             'capacity_factors': capacity_factors,
+            'sharing_strategy': sharing_strategy,
         },
         'args': vars(args),
     }

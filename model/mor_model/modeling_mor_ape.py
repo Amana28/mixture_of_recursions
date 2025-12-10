@@ -35,6 +35,7 @@ class MoRAPEConfig(LlamaAPEConfig):
     mor_type: str = "expert"  # "expert" or "token"
     num_recursion: int = 2
     capacity_factors: List[float] = field(default_factory=lambda: [0.5, 0.5])
+    sharing_strategy: str = "middle_cycle"  # "middle_cycle" or "cycle"
     router_type: str = "linear"
     router_temp: float = 1.0
     # Expert-choice settings
@@ -306,34 +307,54 @@ class MoRAPEForCausalLM(nn.Module):
     
     def _build_layers(self, config: MoRAPEConfig):
         """Build transformer layers with MoR routing."""
-        # Calculate base layer structure
-        # For middle_cycle: [first_layer, MoR blocks, last_layer]
-        base_depth = (config.num_hidden_layers - 2) // config.num_recursion
-        
         layers = []
         
-        # First layer (no MoR)
-        layers.append(LlamaAPEBlock(config))
-        
-        if config.mor_type == "expert":
-            # Expert-choice: each recursion is a MoR block
-            for rec_idx in range(config.num_recursion):
-                blocks = nn.ModuleList([
-                    LlamaAPEBlock(config) for _ in range(base_depth)
+        if config.sharing_strategy == "middle_cycle":
+            # middle_cycle: [first_layer, MoR blocks, last_layer]
+            base_depth = (config.num_hidden_layers - 2) // config.num_recursion
+            
+            # First layer (no MoR)
+            layers.append(LlamaAPEBlock(config))
+            
+            if config.mor_type == "expert":
+                for rec_idx in range(config.num_recursion):
+                    blocks = nn.ModuleList([
+                        LlamaAPEBlock(config) for _ in range(base_depth)
+                    ])
+                    capacity = config.capacity_factors[rec_idx] if rec_idx < len(config.capacity_factors) else 0.5
+                    layers.append(ExpertChoiceMoRBlock(config, blocks, capacity))
+            
+            elif config.mor_type == "token":
+                block_lists = nn.ModuleList([
+                    nn.ModuleList([LlamaAPEBlock(config) for _ in range(base_depth)])
+                    for _ in range(config.num_recursion)
                 ])
-                capacity = config.capacity_factors[rec_idx] if rec_idx < len(config.capacity_factors) else 0.5
-                layers.append(ExpertChoiceMoRBlock(config, blocks, capacity))
+                layers.append(TokenChoiceMoRBlock(config, block_lists))
+            
+            # Last layer (no MoR)
+            layers.append(LlamaAPEBlock(config))
         
-        elif config.mor_type == "token":
-            # Token-choice: all recursions in one block
-            block_lists = nn.ModuleList([
-                nn.ModuleList([LlamaAPEBlock(config) for _ in range(base_depth)])
-                for _ in range(config.num_recursion)
-            ])
-            layers.append(TokenChoiceMoRBlock(config, block_lists))
+        elif config.sharing_strategy == "cycle":
+            # cycle: [MoR blocks only] - all layers use routing
+            base_depth = config.num_hidden_layers // config.num_recursion
+            
+            if config.mor_type == "expert":
+                for rec_idx in range(config.num_recursion):
+                    blocks = nn.ModuleList([
+                        LlamaAPEBlock(config) for _ in range(base_depth)
+                    ])
+                    capacity = config.capacity_factors[rec_idx] if rec_idx < len(config.capacity_factors) else 0.5
+                    layers.append(ExpertChoiceMoRBlock(config, blocks, capacity))
+            
+            elif config.mor_type == "token":
+                block_lists = nn.ModuleList([
+                    nn.ModuleList([LlamaAPEBlock(config) for _ in range(base_depth)])
+                    for _ in range(config.num_recursion)
+                ])
+                layers.append(TokenChoiceMoRBlock(config, block_lists))
         
-        # Last layer (no MoR)
-        layers.append(LlamaAPEBlock(config))
+        else:
+            raise ValueError(f"Unknown sharing strategy: {config.sharing_strategy}")
         
         self.layers = nn.ModuleList(layers)
     
