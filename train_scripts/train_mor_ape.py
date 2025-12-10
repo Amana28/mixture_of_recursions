@@ -84,6 +84,8 @@ parser.add_argument('--aux_loss_coeff', type=float, default=0.001,
                     help='Auxiliary router BCE loss coefficient (0 to disable)')
 parser.add_argument('--cap_warmup_steps', type=int, default=0,
                     help='Capacity warmup steps (0 to disable, cosine decay from 1.0 to target)')
+parser.add_argument('--save_interval', type=int, default=1000,
+                    help='Save checkpoint every N iterations')
 parser.add_argument('--n_layer', type=int, default=6, help='Number of layers (should be divisible)')
 parser.add_argument('--n_head', type=int, default=2, help='Number of attention heads')
 parser.add_argument('--n_embd', type=int, default=240, help='Embedding size')
@@ -368,9 +370,12 @@ while iter_num <= max_iters:
         
         if losses['val'] < best_val_loss:
             best_val_loss = losses['val']
-            save_checkpoint(iter_num, best_val_loss)
-            print(f"Saved best checkpoint at iter {iter_num}")
-            logger.info(f"Saved best checkpoint at iter {iter_num}")
+    
+    # Save checkpoint at intervals
+    if iter_num > 0 and iter_num % args.save_interval == 0:
+        save_checkpoint(iter_num, best_val_loss)
+        print(f"Saved checkpoint at iter {iter_num}")
+        logger.info(f"Saved checkpoint at iter {iter_num}")
 
     # Forward pass
     with ctx:
