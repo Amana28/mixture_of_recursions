@@ -91,19 +91,34 @@ class ExpertChoiceMoRBlock(nn.Module):
         self.alpha = config.expert_alpha
         self.gating = config.expert_gating
     
-    def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def forward(
+        self, 
+        hidden_states: torch.Tensor,
+        prev_selected_tokens: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Args:
-            hidden_states: (batch_size, seq_len, hidden_size)
+            hidden_states: (batch_size, seq_len, hidden_size) - FULL sequence
+            prev_selected_tokens: (batch_size, prev_k, 1) - indices from previous block
         
         Returns:
-            output: Processed hidden states
-            router_loss: Optional router z-loss
+            output: Updated hidden states (full sequence)
+            router_loss: Router z-loss
+            selected_tokens: Current selection indices for chaining
         """
         batch_size, seq_len, hidden_dim = hidden_states.shape
         
-        # Compute router logits
-        router_logits = self.router(hidden_states / self.config.router_temp)
+        # If we have previous selection, gather those tokens first
+        if prev_selected_tokens is not None:
+            x = torch.gather(hidden_states, 1, 
+                            index=prev_selected_tokens.expand(-1, -1, hidden_dim))
+            current_seq_len = x.shape[1]
+        else:
+            x = hidden_states
+            current_seq_len = seq_len
+        
+        # Compute router logits on current token set
+        router_logits = self.router(x / self.config.router_temp)
         
         # Apply router function
         if self.router_func == "sigmoid":
@@ -115,17 +130,17 @@ class ExpertChoiceMoRBlock(nn.Module):
         else:
             router_probs = router_weights = router_logits
         
-        # Select top-k tokens
-        top_k = max(1, int(self.capacity_factor * seq_len))
+        # Select top-k tokens from current set
+        top_k = max(1, int(self.capacity_factor * current_seq_len))
         weights, selected_indices = torch.topk(router_probs, top_k, dim=1, sorted=False)
         
         # Sort indices to maintain causal order
         selected_indices, sort_idx = torch.sort(selected_indices, dim=1)
         weights = torch.gather(weights, dim=1, index=sort_idx)
         
-        # Gather selected tokens
+        # Gather selected tokens from x (the current working set)
         indices_expanded = selected_indices.expand(-1, -1, hidden_dim)
-        selected_tokens = torch.gather(hidden_states, dim=1, index=indices_expanded)
+        selected_tokens = torch.gather(x, dim=1, index=indices_expanded)
         
         # Process through blocks
         for block in self.blocks:
@@ -137,17 +152,26 @@ class ExpertChoiceMoRBlock(nn.Module):
         else:
             processed = selected_tokens
         
-        # Scatter back to original positions
+        # Map selected_indices back to original sequence positions
+        if prev_selected_tokens is not None:
+            # selected_indices are relative to prev_selected_tokens
+            # Map back to original positions
+            orig_indices = torch.gather(prev_selected_tokens, dim=1, index=selected_indices)
+        else:
+            orig_indices = selected_indices
+        
+        # Scatter back to original positions in full sequence
+        orig_indices_expanded = orig_indices.expand(-1, -1, hidden_dim)
         output = hidden_states.clone()
         output = torch.scatter_add(
-            output, dim=1, index=indices_expanded, src=processed
+            output, dim=1, index=orig_indices_expanded, src=processed
         )
         
         # Router z-loss for regularization
         router_z_loss = torch.logsumexp(router_logits.squeeze(-1), dim=-1)
         router_z_loss = router_z_loss.pow(2).mean()
         
-        return output, router_z_loss
+        return output, router_z_loss, orig_indices
 
 
 class TokenChoiceMoRBlock(nn.Module):
@@ -395,12 +419,18 @@ class MoRAPEForCausalLM(nn.Module):
         total_router_z_loss = 0.0
         total_balancing_loss = 0.0
         
+        # Track selected tokens for chaining expert-choice
+        prev_selected_tokens = None
+        
         # Process through layers
         for layer in self.layers:
             if isinstance(layer, (ExpertChoiceMoRBlock, TokenChoiceMoRBlock)):
                 if isinstance(layer, ExpertChoiceMoRBlock):
-                    hidden_states, router_z_loss = layer(hidden_states)
+                    hidden_states, router_z_loss, selected_tokens = layer(
+                        hidden_states, prev_selected_tokens
+                    )
                     total_router_z_loss = total_router_z_loss + router_z_loss
+                    prev_selected_tokens = selected_tokens  # Chain to next block
                 else:
                     hidden_states, router_z_loss, bal_loss = layer(hidden_states)
                     total_router_z_loss = total_router_z_loss + router_z_loss
