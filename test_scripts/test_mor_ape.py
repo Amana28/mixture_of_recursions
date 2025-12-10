@@ -63,8 +63,9 @@ def parse_args():
     parser.add_argument('--device', type=str, default='cuda:0', help='Device')
     parser.add_argument('--num_nodes', type=int, default=100, help='Number of nodes')
     parser.add_argument('--num_of_paths', type=int, default=20, help='Number of paths')
-    parser.add_argument('--batch_size', type=int, default=1000, help='Batch size')
-    parser.add_argument('--num_batches', type=int, default=10, help='Number of batches')
+    parser.add_argument('--batch_size', type=int, default=100, help='Batch size for evaluation')
+    parser.add_argument('--num_samples', type=int, default=-1, 
+                        help='Number of test samples to evaluate (-1 = all)')
     return parser.parse_args()
 
 
@@ -219,10 +220,16 @@ def main():
     
     # Evaluate
     batch_size = args.batch_size
-    num_batches = args.num_batches
+    num_total = len(encode_texts)
+    
+    # Determine how many samples to evaluate
+    if args.num_samples == -1:
+        num_samples = num_total
+    else:
+        num_samples = min(args.num_samples, num_total)
     
     pred_file = os.path.join(out_dir, f'pred_test_{args.ckpt_iter}.txt')
-    print(f"\nRunning evaluation...")
+    print(f"\nRunning evaluation on {num_samples} samples (out of {num_total} total)...")
     print(f"Results will be saved to {pred_file}")
     
     with open(pred_file, 'w') as f:
@@ -231,21 +238,23 @@ def main():
     total_samples = 0
     total_correct = 0
     
-    ix = torch.randint(len(encode_texts), (batch_size,))
-    
-    for i in tqdm(range(num_batches)):
-        x = encode_texts[ix]
-        x_gt = ground_truth[ix.cpu().numpy()]
+    # Process in batches sequentially through the dataset
+    for start_idx in tqdm(range(0, num_samples, batch_size)):
+        end_idx = min(start_idx + batch_size, num_samples)
+        current_batch_size = end_idx - start_idx
+        
+        x = encode_texts[start_idx:end_idx]
+        x_gt = ground_truth[start_idx:end_idx]
         
         # Generate
         with torch.no_grad():
             y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
         
         # Decode predictions
-        y_pred = [decode(y[t].tolist()).split('\n')[0] for t in range(batch_size)]
+        y_pred = [decode(y[t].tolist()).split('\n')[0] for t in range(current_batch_size)]
         
         # Debug first batch
-        if i == 0:
+        if start_idx == 0:
             print(f"\nDebug - First prediction raw tokens: {y[0].tolist()}")
             print(f"Debug - First prediction decoded: {y_pred[0]}")
             print(f"Debug - First ground truth: {x_gt[0].strip()}")
