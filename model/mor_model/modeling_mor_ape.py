@@ -42,6 +42,8 @@ class MoRAPEConfig(LlamaAPEConfig):
     expert_alpha: float = 0.1
     expert_router_func: str = "sigmoid"
     expert_gating: str = "weighted"
+    expert_aux_loss_coeff: float = 0.001  # Auxiliary router loss coefficient
+    expert_cap_warmup_steps: int = 0  # Capacity warmup steps (0 = disabled)
     # Token-choice settings
     token_alpha: float = 1.0
     token_router_func: str = "softmax"
@@ -67,6 +69,7 @@ class ExpertChoiceMoRBlock(nn.Module):
     MoR block using expert-choice routing.
     
     The expert (block) selects which tokens to process based on router scores.
+    Supports capacity warmup and auxiliary router loss.
     """
     
     def __init__(
@@ -74,11 +77,16 @@ class ExpertChoiceMoRBlock(nn.Module):
         config: MoRAPEConfig,
         blocks: nn.ModuleList,
         capacity_factor: float = 0.5,
+        cap_warmup_steps: int = 0,
     ):
         super().__init__()
         self.config = config
         self.blocks = blocks
         self.capacity_factor = capacity_factor
+        self.cap_warmup_steps = cap_warmup_steps
+        
+        # Training step counter for capacity warmup
+        self.register_buffer('training_step', torch.tensor(0, dtype=torch.long))
         
         # Router
         self.router = LinearRouter(
@@ -90,12 +98,16 @@ class ExpertChoiceMoRBlock(nn.Module):
         self.router_func = config.expert_router_func
         self.alpha = config.expert_alpha
         self.gating = config.expert_gating
+        self.aux_loss_coeff = config.expert_aux_loss_coeff
+        
+        # BCE loss for auxiliary router training
+        self.bce_loss = nn.BCEWithLogitsLoss(reduction='sum')
     
     def forward(
         self, 
         hidden_states: torch.Tensor,
         prev_selected_tokens: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Args:
             hidden_states: (batch_size, seq_len, hidden_size) - FULL sequence
@@ -103,10 +115,23 @@ class ExpertChoiceMoRBlock(nn.Module):
         
         Returns:
             output: Updated hidden states (full sequence)
-            router_loss: Router z-loss
+            router_z_loss: Router z-loss
+            aux_loss: Auxiliary router BCE loss
             selected_tokens: Current selection indices for chaining
         """
         batch_size, seq_len, hidden_dim = hidden_states.shape
+        
+        # Capacity warmup: start at 1.0, decay to target capacity
+        if self.training:
+            self.training_step += 1
+            if self.cap_warmup_steps > 0:
+                step_ratio = min(1.0, float(self.training_step) / self.cap_warmup_steps)
+                decay_factor = 0.5 * (1.0 + math.cos(math.pi * step_ratio))
+                effective_capacity = self.capacity_factor + (1.0 - self.capacity_factor) * decay_factor
+            else:
+                effective_capacity = self.capacity_factor
+        else:
+            effective_capacity = self.capacity_factor
         
         # If we have previous selection, gather those tokens first
         if prev_selected_tokens is not None:
@@ -130,13 +155,22 @@ class ExpertChoiceMoRBlock(nn.Module):
         else:
             router_probs = router_weights = router_logits
         
-        # Select top-k tokens from current set
-        top_k = max(1, int(self.capacity_factor * current_seq_len))
+        # Select top-k tokens from current set (use effective_capacity for warmup)
+        top_k = max(1, int(effective_capacity * current_seq_len))
         weights, selected_indices = torch.topk(router_probs, top_k, dim=1, sorted=False)
         
         # Sort indices to maintain causal order
         selected_indices, sort_idx = torch.sort(selected_indices, dim=1)
         weights = torch.gather(weights, dim=1, index=sort_idx)
+        
+        # Compute auxiliary loss (train router to predict its own selections)
+        aux_loss = None
+        if self.training and self.aux_loss_coeff > 0:
+            # Create binary targets: 1 for selected, 0 for not selected
+            targets = torch.zeros_like(router_logits)
+            targets.scatter_(1, selected_indices, 1.0)
+            aux_loss = self.bce_loss(router_logits.view(-1), targets.view(-1))
+            aux_loss = aux_loss / (batch_size * current_seq_len) * self.aux_loss_coeff
         
         # Gather selected tokens from x (the current working set)
         indices_expanded = selected_indices.expand(-1, -1, hidden_dim)
@@ -154,8 +188,6 @@ class ExpertChoiceMoRBlock(nn.Module):
         
         # Map selected_indices back to original sequence positions
         if prev_selected_tokens is not None:
-            # selected_indices are relative to prev_selected_tokens
-            # Map back to original positions
             orig_indices = torch.gather(prev_selected_tokens, dim=1, index=selected_indices)
         else:
             orig_indices = selected_indices
@@ -171,7 +203,7 @@ class ExpertChoiceMoRBlock(nn.Module):
         router_z_loss = torch.logsumexp(router_logits.squeeze(-1), dim=-1)
         router_z_loss = router_z_loss.pow(2).mean()
         
-        return output, router_z_loss, orig_indices
+        return output, router_z_loss, aux_loss, orig_indices
 
 
 class TokenChoiceMoRBlock(nn.Module):
@@ -346,7 +378,10 @@ class MoRAPEForCausalLM(nn.Module):
                         LlamaAPEBlock(config) for _ in range(base_depth)
                     ])
                     capacity = config.capacity_factors[rec_idx] if rec_idx < len(config.capacity_factors) else 0.5
-                    layers.append(ExpertChoiceMoRBlock(config, blocks, capacity))
+                    layers.append(ExpertChoiceMoRBlock(
+                        config, blocks, capacity, 
+                        cap_warmup_steps=config.expert_cap_warmup_steps
+                    ))
             
             elif config.mor_type == "token":
                 block_lists = nn.ModuleList([
@@ -368,7 +403,10 @@ class MoRAPEForCausalLM(nn.Module):
                         LlamaAPEBlock(config) for _ in range(base_depth)
                     ])
                     capacity = config.capacity_factors[rec_idx] if rec_idx < len(config.capacity_factors) else 0.5
-                    layers.append(ExpertChoiceMoRBlock(config, blocks, capacity))
+                    layers.append(ExpertChoiceMoRBlock(
+                        config, blocks, capacity,
+                        cap_warmup_steps=config.expert_cap_warmup_steps
+                    ))
             
             elif config.mor_type == "token":
                 block_lists = nn.ModuleList([
@@ -418,6 +456,7 @@ class MoRAPEForCausalLM(nn.Module):
         # Track auxiliary losses
         total_router_z_loss = 0.0
         total_balancing_loss = 0.0
+        total_aux_loss = 0.0
         
         # Track selected tokens for chaining expert-choice
         prev_selected_tokens = None
@@ -426,10 +465,12 @@ class MoRAPEForCausalLM(nn.Module):
         for layer in self.layers:
             if isinstance(layer, (ExpertChoiceMoRBlock, TokenChoiceMoRBlock)):
                 if isinstance(layer, ExpertChoiceMoRBlock):
-                    hidden_states, router_z_loss, selected_tokens = layer(
+                    hidden_states, router_z_loss, aux_loss, selected_tokens = layer(
                         hidden_states, prev_selected_tokens
                     )
                     total_router_z_loss = total_router_z_loss + router_z_loss
+                    if aux_loss is not None:
+                        total_aux_loss = total_aux_loss + aux_loss
                     prev_selected_tokens = selected_tokens  # Chain to next block
                 else:
                     hidden_states, router_z_loss, bal_loss = layer(hidden_states)
@@ -455,19 +496,22 @@ class MoRAPEForCausalLM(nn.Module):
                 loss = loss + 1e-5 * total_router_z_loss
                 if total_balancing_loss != 0.0:
                     loss = loss + total_balancing_loss
+                if total_aux_loss != 0.0:
+                    loss = loss + total_aux_loss
         else:
             logits = self.lm_head(hidden_states[:, [-1], :])
             loss = None
         
         # Return in HuggingFace-compatible format
         class Output:
-            def __init__(self, logits, loss, router_z_loss=None, balancing_loss=None):
+            def __init__(self, logits, loss, router_z_loss=None, balancing_loss=None, aux_loss=None):
                 self.logits = logits
                 self.loss = loss
                 self.router_z_loss = router_z_loss
                 self.balancing_loss = balancing_loss
+                self.aux_loss = aux_loss
         
-        return Output(logits, loss, total_router_z_loss, total_balancing_loss)
+        return Output(logits, loss, total_router_z_loss, total_balancing_loss, total_aux_loss)
     
     @torch.no_grad()
     def generate(

@@ -80,6 +80,10 @@ parser.add_argument('--capacity', type=str, default='0.5,0.5',
                     help='Capacity factors for expert-choice (comma-separated)')
 parser.add_argument('--sharing', type=str, default='middle_cycle', choices=['middle_cycle', 'cycle'],
                     help='Sharing strategy: middle_cycle (first+last layers no routing) or cycle (all routing)')
+parser.add_argument('--aux_loss_coeff', type=float, default=0.001,
+                    help='Auxiliary router BCE loss coefficient (0 to disable)')
+parser.add_argument('--cap_warmup_steps', type=int, default=0,
+                    help='Capacity warmup steps (0 to disable, cosine decay from 1.0 to target)')
 parser.add_argument('--n_layer', type=int, default=6, help='Number of layers (should be divisible)')
 parser.add_argument('--n_head', type=int, default=2, help='Number of attention heads')
 parser.add_argument('--n_embd', type=int, default=240, help='Embedding size')
@@ -241,6 +245,8 @@ model = create_mor_ape(
     num_recursion=num_recursion,
     capacity_factors=capacity_factors,
     sharing_strategy=sharing_strategy,
+    expert_aux_loss_coeff=args.aux_loss_coeff,
+    expert_cap_warmup_steps=args.cap_warmup_steps,
     attention_dropout=dropout,
     hidden_dropout=dropout,
 )
