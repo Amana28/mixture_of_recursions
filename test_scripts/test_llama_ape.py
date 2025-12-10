@@ -1,8 +1,8 @@
 """
-Testing script for LLaMA with Learned Position Embeddings.
+Testing script for LLaMA with Absolute Position Embeddings (APE).
 
 Example usage:
-    python test_scripts/test_llama_pe.py \
+    python test_scripts/test_llama_ape.py \
         --dataset dag/st \
         --ckpt_iter 9000 \
         --n_layer 2 \
@@ -28,14 +28,13 @@ from tqdm import tqdm
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from transformers import LlamaConfig
-from model.llama_learned_pe import LlamaWithLearnedPE, create_llama_with_learned_pe
+from model.base_model.modeling_llama_ape import LlamaAPEConfig, LlamaAPEForCausalLM, create_llama_ape
 
 # -----------------------------------------------------------------------------
 # Parse arguments
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Testing LLaMA with Learned PE.')
+    parser = argparse.ArgumentParser(description='Testing LLaMA-APE on graph data.')
     parser.add_argument('--dataset', type=str, default='dag/st', help='Dataset path')
     parser.add_argument('--ckpt_iter', type=int, default=10000, help='Checkpoint iteration')
     parser.add_argument('--n_layer', type=int, default=2, help='Number of layers')
@@ -93,10 +92,10 @@ def main():
     num_nodes = args.num_nodes
     num_of_paths = args.num_of_paths
     
-    # Paths (with _pe suffix)
+    # Paths (with _ape suffix)
     data_path = f'data/{dataset}/{num_nodes}'
     meta_path = f'{data_path}/meta.pkl'
-    out_dir = f'out/{dataset}_llama_pe_{args.n_layer}L_{args.n_head}H_{args.n_embd}E_{num_nodes}N'
+    out_dir = f'out/{dataset}_llama_ape_{args.n_layer}L_{args.n_head}H_{args.n_embd}E_{num_nodes}N'
     
     # Load metadata
     print(f"Loading meta from {meta_path}...")
@@ -132,7 +131,7 @@ def main():
     
     # Create model
     saved_config = checkpoint.get('config', {})
-    model = create_llama_with_learned_pe(
+    model = create_llama_ape(
         vocab_size=saved_config.get('vocab_size', vocab_size),
         hidden_size=saved_config.get('hidden_size', args.n_embd),
         intermediate_size=saved_config.get('intermediate_size', args.n_embd * 4),
@@ -142,12 +141,18 @@ def main():
         max_position_embeddings=saved_config.get('max_position_embeddings', block_size),
     )
     
-    model.load_state_dict(checkpoint['model'])
+    # Load state dict
+    state_dict = checkpoint['model']
+    unwanted_prefix = '_orig_mod.'
+    for k, v in list(state_dict.items()):
+        if k.startswith(unwanted_prefix):
+            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+    
+    model.load_state_dict(state_dict)
     model.eval()
     model.to(device)
     
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"Model loaded: {n_params/1e6:.2f}M parameters")
+    print(f"Model loaded!")
     
     # Load graph
     graph_path = f'{data_path}/path_graph.graphml'
@@ -207,7 +212,7 @@ def main():
         x = encode_texts[ix]
         x_gt = ground_truth[ix.cpu().numpy()]
         
-        # Generate using model's generate method
+        # Generate
         with torch.no_grad():
             y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
         

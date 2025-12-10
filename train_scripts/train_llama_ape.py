@@ -1,11 +1,11 @@
 """
-Training script for LLaMA with Learned Position Embeddings.
+Training script for LLaMA with Absolute Position Embeddings (APE).
 
-Uses LlamaWithLearnedPE which adds GPT-style absolute position embeddings
-to the LLaMA architecture, which may help with position-sensitive tasks.
+This uses LlamaAPE which replaces RoPE entirely with learned position embeddings,
+similar to GPT-2's architecture but with LLaMA's components (RMSNorm, SwiGLU).
 
 Example usage:
-    python train_scripts/train_llama_pe.py \
+    python train_scripts/train_llama_ape.py \
         --dataset dag/st \
         --n_layer 2 \
         --n_head 2 \
@@ -30,8 +30,7 @@ import torch
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from transformers import LlamaConfig
-from model.llama_learned_pe import LlamaWithLearnedPE, create_llama_with_learned_pe
+from model.base_model.modeling_llama_ape import LlamaAPEConfig, LlamaAPEForCausalLM, create_llama_ape
 
 # -----------------------------------------------------------------------------
 # Logging setup
@@ -57,7 +56,7 @@ def get_logger(filename, verbosity=0, name=None):
 # -----------------------------------------------------------------------------
 # Parse arguments
 
-parser = argparse.ArgumentParser(description='Training LLaMA with Learned PE on graph data.')
+parser = argparse.ArgumentParser(description='Training LLaMA-APE on graph data.')
 
 parser.add_argument('--dataset', type=str, default='dag/st', help='Dataset path')
 parser.add_argument('--n_layer', type=int, default=2, help='Number of layers')
@@ -102,8 +101,8 @@ vocab_size = meta['vocab_size']
 print(f"Vocabulary size: {vocab_size}")
 print(f"Block size: {block_size}")
 
-# Output directory (with _pe suffix to indicate learned PE)
-out_dir = f'out/{dataset}_llama_pe_{n_layer}L_{n_head}H_{n_embd}E_{num_nodes}N'
+# Output directory (_ape suffix = Absolute Position Embeddings)
+out_dir = f'out/{dataset}_llama_ape_{n_layer}L_{n_head}H_{n_embd}E_{num_nodes}N'
 os.makedirs(out_dir, exist_ok=True)
 
 # Initialize logger
@@ -111,7 +110,7 @@ if num_of_paths == 0:
     log_file_name = os.path.join(out_dir, 'train.log')
 else:
     log_file_name = os.path.join(out_dir, f'train_{num_of_paths}.log')
-logger = get_logger(log_file_name, verbosity=1, name='train_llama_pe')
+logger = get_logger(log_file_name, verbosity=1, name='train_llama_ape')
 
 # -----------------------------------------------------------------------------
 # Training hyperparameters
@@ -171,7 +170,7 @@ def get_batch(split):
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
     
-    # Replace PAD tokens (0) with -100 for HuggingFace loss
+    # Replace PAD tokens (0) with -100 for loss computation
     y = torch.where(y == 0, torch.tensor(-100), y)
     
     if device_type == 'cuda':
@@ -184,9 +183,9 @@ def get_batch(split):
 # -----------------------------------------------------------------------------
 # Model initialization
 
-print("Initializing LLaMA with Learned Position Embeddings...")
+print("Initializing LLaMA-APE model (Absolute Position Embeddings)...")
 
-model = create_llama_with_learned_pe(
+model = create_llama_ape(
     vocab_size=vocab_size,
     hidden_size=n_embd,
     intermediate_size=n_embd * 4,
@@ -194,13 +193,11 @@ model = create_llama_with_learned_pe(
     num_attention_heads=n_head,
     num_key_value_heads=n_head,
     max_position_embeddings=block_size,
+    attention_dropout=dropout,
+    hidden_dropout=dropout,
 )
 
 model.to(device)
-
-# Count parameters
-n_params = sum(p.numel() for p in model.parameters())
-print(f"Number of parameters: {n_params/1e6:.2f}M")
 
 # Compile if requested
 if args.compile and hasattr(torch, 'compile'):
