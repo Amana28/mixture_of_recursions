@@ -163,6 +163,7 @@ def main():
         mor_type=saved_config.get('mor_type', mor_type),
         num_recursion=saved_config.get('num_recursion', num_recursion),
         capacity_factors=saved_config.get('capacity_factors', capacity_factors),
+        sharing_strategy=saved_config.get('sharing_strategy', 'middle_cycle'),
     )
     
     # Load state dict
