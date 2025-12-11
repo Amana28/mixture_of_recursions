@@ -39,7 +39,7 @@ class MoRAPEConfig(LlamaAPEConfig):
     router_type: str = "linear"
     router_temp: float = 1.0
     # Expert-choice settings
-    expert_alpha: float = 0.5
+    expert_alpha: float = 0.1
     expert_router_func: str = "sigmoid"
     expert_gating: str = "weighted"
     expert_aux_loss_coeff: float = 0.001  # Auxiliary router loss coefficient
